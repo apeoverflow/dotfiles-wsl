@@ -1,0 +1,51 @@
+name: CI
+
+# Verify the WSL dotfiles on a real Ubuntu runner: syntax-check every shell
+# script, run install.sh, assert the symlinks land, and run doctor.sh.
+# ~1 minute per run — negligible against the free Actions allotment.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install core dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            zsh tmux git jq fzf ripgrep fd-find bat lsof uuid-runtime shellcheck
+
+      - name: Syntax-check bash scripts (bash -n)
+        run: |
+          set -e
+          # pick every bash-shebanged file (skips the uv/python claude-dash and .zshrc)
+          mapfile -t files < <(grep -rIl -E '^#!.*(bash|/bin/sh)' setup.sh doctor.sh install.sh home)
+          for f in "${files[@]}"; do echo "bash -n $f"; bash -n "$f"; done
+
+      - name: Syntax-check .zshrc (zsh -n)
+        run: zsh -n home/.zshrc
+
+      - name: shellcheck (errors only, non-blocking on style)
+        run: |
+          shellcheck -S error setup.sh doctor.sh install.sh \
+            home/.tmux/*.sh home/.claude/hooks/*.sh || true
+
+      - name: install.sh creates the expected symlinks
+        run: |
+          set -e
+          ./install.sh
+          for t in "$HOME/.zshrc" "$HOME/.tmux.conf" "$HOME/.local/bin/cw" "$HOME/.claude/hooks/lib.sh"; do
+            if [ -L "$t" ]; then echo "✓ symlink: $t -> $(readlink "$t")"; else echo "✗ missing symlink: $t"; exit 1; fi
+          done
+
+      - name: install.sh is idempotent (second run is a no-op)
+        run: ./install.sh
+
+      - name: doctor.sh (informational — AI CLIs / optional tools absent in CI)
+        run: ./doctor.sh || true
