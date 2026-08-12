@@ -85,9 +85,32 @@ clone https://github.com/tmux-plugins/tpm            ~/.tmux/plugins/tpm
 clone https://github.com/tmux-plugins/tmux-resurrect ~/.tmux/plugins/tmux-resurrect
 clone https://github.com/tmux-plugins/tmux-continuum ~/.tmux/plugins/tmux-continuum
 
-echo "== neovim (bob) =="
-command -v bob  >/dev/null 2>&1 || echo "   install bob:  cargo install bob-nvim   (or a release binary), then: bob use stable"
-command -v nvim >/dev/null 2>&1 || echo "   then clone your nvim config: git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim"
+echo "== neovim (official release binary — no cargo/bob needed) =="
+if ! command -v nvim >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    x86_64|amd64)  nvarch="linux-x86_64" ;;
+    aarch64|arm64) nvarch="linux-arm64"  ;;
+    *)             nvarch="linux-x86_64" ;;
+  esac
+  # try the current asset name, then fall back to the older linux64 name
+  if   curl -fsSL "https://github.com/neovim/neovim/releases/latest/download/nvim-${nvarch}.tar.gz" -o /tmp/nvim.tgz \
+    || curl -fsSL "https://github.com/neovim/neovim/releases/latest/download/nvim-linux64.tar.gz"   -o /tmp/nvim.tgz; then
+    rm -rf ~/.local/nvim && mkdir -p ~/.local/nvim
+    tar xf /tmp/nvim.tgz -C ~/.local/nvim --strip-components=1 && rm -f /tmp/nvim.tgz
+    mkdir -p ~/.local/bin && ln -sf ~/.local/nvim/bin/nvim ~/.local/bin/nvim
+    echo "  ✓ neovim $(~/.local/bin/nvim --version 2>/dev/null | head -1)"
+  else
+    echo "  ✗ neovim download failed — install manually"
+  fi
+fi
+# LazyVim config (public repo). First `nvim` launch bootstraps lazy.nvim + plugins.
+if [ ! -e ~/.config/nvim/init.lua ]; then
+  git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim \
+    && echo "  ✓ cloned KW-IDE -> ~/.config/nvim (run 'nvim' once to sync plugins)" \
+    || echo "  ✗ KW-IDE clone failed"
+else
+  echo "  • ~/.config/nvim already present — left as-is"
+fi
 
 echo "== default shell =="
 [ "${SHELL:-}" = "$(command -v zsh)" ] || echo "   run:  chsh -s \$(which zsh)   then restart WSL (wsl --shutdown from Windows)"

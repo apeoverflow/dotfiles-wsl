@@ -14,11 +14,20 @@ link() { if [ -L "$2" ]; then printf '  \033[32m✓\033[0m %-20s -> %s\n' "${2/#
 
 echo "── core ─────────────────────────";      for t in zsh tmux git jq fzf uuidgen lsof node; do chk "$t"; done
 echo "── modern CLI ───────────────────";      for t in eza bat fd rg ag btop lazygit; do chk "$t"; done
-echo "── WSL interop ──────────────────";       chk wslview "apt install wslu"; chk clip.exe "Windows interop on PATH?"; warnc powershell.exe "for toast notifications"
+echo "── WSL interop ──────────────────"
+if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+  chk wslview "apt install wslu"; chk clip.exe "Windows interop on PATH?"; warnc powershell.exe "for toast notifications"
+else
+  printf '  \033[33m•\033[0m %-16s N/A — not running under WSL (present on the real work box)\n' wslview
+  printf '  \033[33m•\033[0m %-16s N/A — not running under WSL\n' clip.exe
+  warn=$((warn+2))
+fi
 echo "── notifications ────────────────"
-if command -v notify-send >/dev/null 2>&1 || command -v powershell.exe >/dev/null 2>&1; then echo "  ✓ a notifier is available"; ok=$((ok+1)); else echo "  ✗ no notifier (notify-send or powershell.exe)"; miss=$((miss+1)); fi
-echo "── AI CLIs ──────────────────────";      for t in claude copilot; do chk "$t"; done
-echo "── optional ─────────────────────";      for t in dust duf procs bob nvim; do warnc "$t"; done
+if command -v notify-send >/dev/null 2>&1 || command -v powershell.exe >/dev/null 2>&1; then echo "  ✓ a notifier is available"; ok=$((ok+1)); else printf '  \033[33m•\033[0m no notifier yet (notify-send / powershell.exe) — WSLg or a daemon provides it\n'; warn=$((warn+1)); fi
+# AI CLIs are installed by their own installers, not setup.sh — flag, don't fail.
+echo "── editor ───────────────────────";      chk nvim "setup.sh installs it"; dir ~/.config/nvim/init.lua
+echo "── AI CLIs (install separately) ──";      for t in claude copilot; do warnc "$t" "claude installer / npm i -g @github/copilot"; done
+echo "── optional ─────────────────────";      for t in dust duf procs bob; do warnc "$t"; done
 echo "── zsh / tmux plugins ───────────"
 dir ~/.oh-my-zsh
 dir ~/.oh-my-zsh/custom/themes/powerlevel10k

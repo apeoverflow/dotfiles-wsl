@@ -64,7 +64,7 @@ jobs:
           set -e
           export PATH="$HOME/.local/bin:$PATH"
           missing=0
-          for t in zsh tmux fzf rg bat fd btop eza node; do
+          for t in zsh tmux fzf rg bat fd btop eza node nvim; do
             if command -v "$t" >/dev/null 2>&1; then echo "✓ $t"; else echo "✗ $t MISSING"; missing=1; fi
           done
           [ "$missing" -eq 0 ] || { echo "core tools missing after setup.sh"; exit 1; }
