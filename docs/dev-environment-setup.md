@@ -72,10 +72,9 @@ brew bundle dump --force --file=./Brewfile   # regenerate the snapshot
 > remove those alias lines. (`ps→procs` being missing is why `ps` errors.)
 
 ### 2.2 Language toolchains (installed outside brew, referenced in `~/.zshrc` PATH)
-`bun`, `nvm` (lazy-loaded), Solana, `nargo`/Noir + `bb`, Ruby (brew) + gems,
-Flutter via `fvm`, Dart, `pipx` venvs (poetry, slither, neovim-remote→`nvr`),
-`uv`/`uvx`, Google Cloud SDK, Postgres@17, Java 17. These are optional per
-project — install only what you use.
+`bun`, `nvm` (lazy-loaded), Ruby (brew) + gems, Flutter via `fvm`, Dart,
+`pipx` venvs (poetry, neovim-remote→`nvr`), `uv`/`uvx`, Google Cloud SDK,
+Postgres@17, Java 17. These are optional per project — install only what you use.
 
 ### 2.3 oh-my-zsh + external zsh pieces
 - **oh-my-zsh** at `~/.oh-my-zsh`.
@@ -247,7 +246,7 @@ git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim && nvim   # l
 #    Claude Code: official installer → ~/.local/bin/claude
 #    Copilot CLI: npm i -g @github/copilot   (needs node)
 
-# 7. Language toolchains as needed (bun, nvm, solana, fvm, uv, pipx tools…)
+# 7. Language toolchains as needed (bun, nvm, fvm, uv, pipx tools…)
 chmod +x ~/.local/bin/cw ~/.local/bin/cwcd ~/.local/bin/cws ~/.local/bin/claude-*
 chmod +x ~/.claude/hooks/*.sh ~/.tmux/ai-persist-*.sh
 ```
@@ -296,8 +295,8 @@ Apply with: `cd ~/dotfiles && stow zsh tmux bin claude`
 - `~/.copilot/` — copilot session state + oauth
 - `~/.tmux/ai-persist/ai-live.json`, `~/.local/share/tmux/resurrect/` — snapshots
 - `~/.tmux/plugins/` — cloned plugins (reinstall via tpm)
-- `~/.local/bin/` **symlinks + binaries** (`claude`, `uv`, `sui`, `surfpool`,
-  `herdr`, `nvr`, `slither*`, `poetry`, `duckdb`) — reinstalled by their tools
+- `~/.local/bin/` **symlinks + binaries** (`claude`, `uv`, `herdr`, `nvr`,
+  `poetry`, `duckdb`) — reinstalled by their tools
 - `~/.local/bin/{pipx,userpath,*python-argcomplete*}` — pipx-generated wrappers
 - The `~/Code/personal/claude-bot/.secrets` file, any `google-cloud-sdk`
 

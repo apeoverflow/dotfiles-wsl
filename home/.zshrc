@@ -132,7 +132,6 @@ alias j="java -cp ./build"
 alias lg="lazygit"
 
 alias u="~/Uni/y3"
-alias hh="npx hardhat"
 
 
 export PATH="$HOME/bin:$PATH"
@@ -204,12 +203,7 @@ nvm() {
     nvm "$@"
 }
 export PATH="$HOME/.local/bin:$PATH"
-export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-export NARGO_HOME="$HOME/.nargo"
-
-export PATH="$PATH:$NARGO_HOME/bin"
-export PATH="${HOME}/.bb:${PATH}"
 # To customize prompt, run `p10k configure` or edit ~/.p10k.zsh.
 [[ ! -f ~/.p10k.zsh ]] || source ~/.p10k.zsh
 
@@ -224,7 +218,7 @@ export LESS="-R"
 export MANPAGER="sh -c 'col -bx | bat -l man -p'"
 
 # (macOS-only PATH entries removed: /opt/homebrew, gcloud in ~/Downloads,
-#  ~/.bb, ~/.fvm_flutter, dart-cli-completion. Add WSL/work equivalents here as
+#  ~/.fvm_flutter, dart-cli-completion. Add WSL/work equivalents here as
 #  needed — e.g. gcloud from its Linux install, rbenv, etc.)
 
 # Launch nvim using a worktree config for testing
