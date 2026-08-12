@@ -60,8 +60,15 @@ cd ~/dotfiles-wsl && git add -A && git commit -m "…" && git push
 
 The **portable core is unchanged**: `cw`, all `claude-*` scripts, the pane-map,
 the Stop/Notification hooks, tmux keybindings, and the resurrect + ai-persist
-reboot layer. Package management is `apt` + a couple of release binaries instead
-of a Brewfile (see `setup.sh`).
+reboot layer. Package management is `apt` + a couple of release binaries (see
+`setup.sh`).
+
+**Optional `Brewfile`** — a reduced version of the macOS Brewfile for use with
+Homebrew-on-Linux (`brew bundle --file=Brewfile`), if you'd rather manage the
+heavier dev tools with brew. It **drops all `cask`, `vscode`, `cargo`, and `go`
+entries** plus the macOS-only formulae. The core CLI already comes from `apt`, so
+this is purely for the extras (llvm, cmake, postgres, python, …) — skip it if
+apt is enough.
 
 ---
 
