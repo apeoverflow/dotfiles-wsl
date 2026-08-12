@@ -25,7 +25,7 @@ chsh -s $(which zsh)   # then restart WSL:  wsl --shutdown  (from Windows)
 
 AI CLIs (install separately): **Claude Code** (official installer →
 `~/.local/bin/claude`) and **Copilot** (`npm i -g @github/copilot`, needs Node).
-Neovim config is its own repo: `git clone git@github.com:apeoverflow/KW-IDE.git ~/.config/nvim`.
+Neovim config is its own repo: `git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim`.
 
 ---
 

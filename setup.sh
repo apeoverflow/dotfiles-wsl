@@ -61,7 +61,7 @@ clone https://github.com/tmux-plugins/tmux-continuum ~/.tmux/plugins/tmux-contin
 
 echo "== neovim (bob) =="
 command -v bob  >/dev/null 2>&1 || echo "   install bob:  cargo install bob-nvim   (or a release binary), then: bob use stable"
-command -v nvim >/dev/null 2>&1 || echo "   then clone your nvim config: git clone git@github.com:apeoverflow/KW-IDE.git ~/.config/nvim"
+command -v nvim >/dev/null 2>&1 || echo "   then clone your nvim config: git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim"
 
 echo "== default shell =="
 [ "${SHELL:-}" = "$(command -v zsh)" ] || echo "   run:  chsh -s \$(which zsh)   then restart WSL (wsl --shutdown from Windows)"

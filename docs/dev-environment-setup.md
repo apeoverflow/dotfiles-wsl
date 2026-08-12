@@ -194,7 +194,7 @@ longer trusts it — see `tmux-persistence.md`.)
 - **Manager:** `folke/lazy.nvim` (bootstrapped in `lua/config/lazy.lua`); base
   distro is **LazyVim** (`lazyvim.json`, `lazy-lock.json` pins versions).
 - **Config repo:** `~/.config/nvim` is already a git repo →
-  `git@github.com:apeoverflow/KW-IDE.git`. **This is your nvim dotfiles — keep
+  `https://github.com/apeoverflow/KW-IDE.git`. **This is your nvim dotfiles — keep
   committing here.**
 - **Structure:** `init.lua` + `lua/config/{lazy,options,keymaps,autocmds,
   treesitter}.lua` + `lua/plugins/*.lua` (avante, claude-code, copilot,
@@ -241,7 +241,7 @@ tmux start-server \; source-file ~/.tmux.conf            # then prefix+I
 
 # 5. Neovim
 brew install bob && bob use stable
-git clone git@github.com:apeoverflow/KW-IDE.git ~/.config/nvim && nvim   # lazy syncs
+git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim && nvim   # lazy syncs
 
 # 6. AI CLIs
 #    Claude Code: official installer → ~/.local/bin/claude
