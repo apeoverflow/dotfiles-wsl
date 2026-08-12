@@ -71,8 +71,23 @@ for t in dust duf procs; do
 done
 
 echo "== oh-my-zsh + theme/plugins =="
-[ -d ~/.oh-my-zsh ] || RUNZSH=no CHSH=no \
-  sh -c "$(curl -fsSL https://raw.githubusercontent.com/ohmyzsh/ohmyzsh/master/tools/install.sh)"
+# Guard on the actual core file, not just the directory — cloning plugins into
+# ~/.oh-my-zsh/custom/ creates the dir, which would otherwise skip the install
+# and leave oh-my-zsh half-installed (missing oh-my-zsh.sh). Install via git so
+# it's deterministic and self-repairs a partial install without clobbering custom/.
+if [ ! -f ~/.oh-my-zsh/oh-my-zsh.sh ]; then
+  tmp=$(mktemp -d)
+  if git clone --depth=1 https://github.com/ohmyzsh/ohmyzsh.git "$tmp/omz" >/dev/null 2>&1; then
+    mkdir -p ~/.oh-my-zsh
+    cp -rn "$tmp/omz/." ~/.oh-my-zsh/    # fill in core files, keep any existing custom/
+    echo "  ✓ oh-my-zsh installed"
+  else
+    echo "  ✗ oh-my-zsh clone failed"
+  fi
+  rm -rf "$tmp"
+else
+  echo "  ✓ oh-my-zsh already present"
+fi
 ZC=${ZSH_CUSTOM:-$HOME/.oh-my-zsh/custom}
 clone https://github.com/romkatv/powerlevel10k            "$ZC/themes/powerlevel10k"
 clone https://github.com/zsh-users/zsh-autosuggestions     "$ZC/plugins/zsh-autosuggestions"

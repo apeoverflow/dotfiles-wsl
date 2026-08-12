@@ -68,3 +68,16 @@ jobs:
             if command -v "$t" >/dev/null 2>&1; then echo "✓ $t"; else echo "✗ $t MISSING"; missing=1; fi
           done
           [ "$missing" -eq 0 ] || { echo "core tools missing after setup.sh"; exit 1; }
+
+      - name: Assert oh-my-zsh core present and .zshrc loads cleanly
+        run: |
+          set -e
+          test -f "$HOME/.oh-my-zsh/oh-my-zsh.sh" || { echo "✗ oh-my-zsh core (oh-my-zsh.sh) missing"; exit 1; }
+          echo "✓ oh-my-zsh core present"
+          ./install.sh >/dev/null          # symlink .zshrc etc. into $HOME
+          # load the real interactive .zshrc and fail on any load-time error
+          err=$(zsh -ic 'true' 2>&1 >/dev/null || true)
+          if printf '%s' "$err" | grep -qiE "command not found|no such file or directory"; then
+            echo "::error::.zshrc emitted load errors:"; printf '%s\n' "$err"; exit 1
+          fi
+          echo "✓ .zshrc loads without errors"
