@@ -1,0 +1,226 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-windows — fzf picker of current tmux windows with preview.
+# Features: switch, create, kill+cleanup, move to end, move to position.
+# Called by: bind w run-shell "~/.local/bin/claude-windows"
+set -uo pipefail
+
+command -v fzf >/dev/null 2>&1 || { tmux display-message "brew install fzf"; exit 1; }
+
+session=$(tmux display-message -p '#{session_name}')
+pane_dir=$(tmux display-message -p '#{pane_current_path}')
+
+build_entries() {
+  local entries=""
+  while IFS=$'\t' read -r win_idx win_name pane_cmd pane_path active; do
+    local icon=" "
+    if [[ "$win_name" == "✓ "* ]]; then
+      icon="✓"
+    elif [[ "$win_name" == "! "* ]]; then
+      icon="!"
+    elif [[ "$active" == "1" ]]; then
+      icon="›"
+    fi
+
+    local git_branch=""
+    if [[ -d "$pane_path" ]]; then
+      git_branch=$(git -C "$pane_path" branch --show-current 2>/dev/null) || true
+    fi
+
+    local short_path="${pane_path/#$HOME/~}"
+    local line
+    line=$(printf '%s  %2s  %-24s  %-12s  %-20s  %s' \
+      "$icon" "$win_idx" "$win_name" "$pane_cmd" "${git_branch:--}" "$short_path")
+    entries="${entries}${line}\n"
+  done < <(tmux list-windows -t "$session" -F '#{window_index}	#{window_name}	#{pane_current_command}	#{pane_current_path}	#{window_active}')
+  printf '%b' "$entries"
+}
+
+kill_window() {
+  local win_idx="$1"
+  local win_name win_path
+  win_name=$(tmux display-message -t "${session}:${win_idx}" -p '#{window_name}' 2>/dev/null) || return
+  win_path=$(tmux display-message -t "${session}:${win_idx}" -p '#{pane_current_path}' 2>/dev/null) || true
+
+  local wt_name="$win_name"
+  wt_name="${wt_name#✓ }"
+  wt_name="${wt_name#! }"
+  wt_name="${wt_name%+}"
+
+  # Get the main repo root (not the worktree root).
+  # `git worktree list` first line is always the main working tree.
+  local repo_root=""
+  if [[ -n "$win_path" ]]; then
+    repo_root=$(git -C "$win_path" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //') || true
+  fi
+  if [[ -z "$repo_root" ]]; then
+    repo_root=$(git -C "$pane_dir" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //') || true
+  fi
+
+  # Check if another window is using the same worktree
+  local other_users=0
+  while IFS=$'\t' read -r idx name; do
+    [[ "$idx" == "$win_idx" ]] && continue
+    local clean_name="$name"
+    clean_name="${clean_name#✓ }"
+    clean_name="${clean_name#! }"
+    clean_name="${clean_name%+}"
+    if [[ "$clean_name" == "$wt_name" ]]; then
+      other_users=$((other_users + 1))
+    fi
+  done < <(tmux list-windows -t "$session" -F '#{window_index}	#{window_name}')
+
+  # Kill the window
+  tmux kill-window -t "${session}:${win_idx}" 2>/dev/null || return
+
+  # Only remove worktree if no other windows are using it
+  if [[ "$other_users" -gt 0 ]]; then
+    tmux display-message "Window closed (worktree kept — $other_users other session(s) using it)"
+    return
+  fi
+
+  if [[ -n "$repo_root" ]]; then
+    local wt_dir="${repo_root}/.claude/worktrees/${wt_name}"
+    if [[ -d "$wt_dir" ]]; then
+      git -C "$repo_root" worktree remove "$wt_dir" --force 2>&1 || \
+        rm -rf "$wt_dir" 2>/dev/null
+      git -C "$repo_root" worktree prune 2>/dev/null || true
+    fi
+  fi
+}
+
+move_to_end() {
+  local win_idx="$1"
+  local last_idx
+  last_idx=$(tmux list-windows -t "$session" -F '#{window_index}' | tail -1)
+  local target=$((last_idx + 1))
+  tmux move-window -s "${session}:${win_idx}" -t "${session}:${target}" 2>/dev/null || true
+  tmux move-window -r -t "$session" 2>/dev/null || true
+}
+
+move_to_position() {
+  local win_idx="$1"
+  local win_name
+  win_name=$(tmux display-message -t "${session}:${win_idx}" -p '#{window_name}' 2>/dev/null) || return
+
+  # Build position list from current windows
+  local positions=""
+  while IFS=$'\t' read -r idx name; do
+    if [[ "$idx" == "$win_idx" ]]; then
+      positions="${positions}${idx}  ${name}  ← current\n"
+    else
+      positions="${positions}${idx}  ${name}\n"
+    fi
+  done < <(tmux list-windows -t "$session" -F '#{window_index}	#{window_name}')
+
+  local target
+  target=$(printf '%b' "$positions" | fzf \
+    --prompt="move '${win_name}' to position > " \
+    --header="Select target position (window will swap)" \
+    --reverse \
+    --no-sort \
+    --pointer="→" | awk '{print $1}') || true
+
+  [[ -z "$target" || "$target" == "$win_idx" ]] && return
+
+  tmux swap-window -s "${session}:${win_idx}" -t "${session}:${target}" 2>/dev/null || true
+}
+
+create_session() {
+  local repo_root suggestions=""
+  repo_root=$(git -C "$pane_dir" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //') || true
+  if [[ -n "$repo_root" && -d "${repo_root}/.claude/worktrees" ]]; then
+    suggestions=$(ls "${repo_root}/.claude/worktrees" 2>/dev/null | tr '\n' ' ')
+  fi
+
+  local flags=("-d:dangerously-skip-permissions" "-s:Sonnet model" "-sd:Sonnet+dangerous" "-n:normal mode" "-nw:no worktree" "-c:GitHub Copilot")
+  local flag_hint=""
+  for f in "${flags[@]}"; do
+    flag_hint="${flag_hint}  ${f%%:*}  ${f#*:}\n"
+  done
+
+  local current_branch=""
+  if [[ -n "$repo_root" ]]; then
+    current_branch=$(git -C "$repo_root" branch --show-current 2>/dev/null) || true
+  fi
+
+  local header
+  header=$(printf 'Enter: cw <name> [flags]\n\n⚠ Base branch: %s\n\nFlags:\n%b\nExisting worktrees: %s\n\nType name and flags, e.g.: feat-auth -d' "${current_branch:-unknown}" "$flag_hint" "${suggestions:-none}")
+
+  local items=" \n"
+  for s in $suggestions; do
+    items="${items}${s}\n"
+  done
+
+  local fzf_cmd="fzf"
+
+  local input
+  input=$(printf '%b' "$items" | $fzf_cmd \
+    --prompt="cw " \
+    --header="$header" \
+    --print-query \
+    --disabled \
+    --reverse \
+    --cycle \
+    --pointer="→" \
+    --bind="tab:down+replace-query" \
+    --query="" | head -1) || true
+  input=$(echo "$input" | xargs)
+
+  [[ -z "$input" ]] && return
+
+  local launch_from="$pane_dir"
+  [[ -n "$repo_root" ]] && launch_from="$repo_root"
+  (cd "$launch_from" && ~/.local/bin/cw $input)
+}
+
+# Sub-command handlers (called by fzf execute-silent / reload)
+case "${1:-}" in
+  --kill) kill_window "$2"; exit 0 ;;
+  --move-end) move_to_end "$2"; exit 0 ;;
+  --list) build_entries; exit 0 ;;
+  --new) create_session; exit 0 ;;
+esac
+
+entries=$(build_entries)
+[[ -z "$entries" ]] && { tmux display-message "No windows"; exit 0; }
+
+header=$(printf '%s  %2s  %-24s  %-12s  %-20s  %s\n\n  Enter: switch  Ctrl-N: new cw  Ctrl-S: shell  Ctrl-X: kill  Ctrl-E: move to end  Ctrl-R: reorder' \
+  " " "#" "Name" "Process" "Branch" "Directory")
+
+self="$0"
+selected=$(printf '%s' "$entries" | fzf \
+  --prompt="window > " \
+  --header="$header" \
+  --reverse \
+  --no-sort \
+  --pointer="→" \
+  --preview="tmux capture-pane -t ${session}:{2} -p -e 2>/dev/null | tail -40" \
+  --preview-window="right:55%:wrap" \
+  --bind="ctrl-n:become(echo __NEW__)" \
+  --bind="ctrl-s:become(echo __SHELL__)" \
+  --bind="ctrl-x:execute-silent($self --kill {2})+reload($self --list)" \
+  --bind="ctrl-e:execute-silent($self --move-end {2})+reload($self --list)" \
+  --bind="ctrl-r:become(echo __REORDER__ {2})") || true
+
+if [[ "$selected" == "__NEW__" ]]; then
+  create_session
+  exit 0
+fi
+
+if [[ "$selected" == "__SHELL__" ]]; then
+  tmux new-window -c "$pane_dir"
+  exit 0
+fi
+
+if [[ "$selected" == __REORDER__* ]]; then
+  reorder_idx="${selected#__REORDER__ }"
+  move_to_position "$reorder_idx"
+  exit 0
+fi
+
+[[ -z "$selected" ]] && exit 0
+
+win_idx=$(echo "$selected" | awk '{print $2}')
+[[ -z "$win_idx" ]] && exit 0
+
+tmux select-window -t "${session}:${win_idx}" 2>/dev/null || true

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-gc — clean up old pane-map files and trim ready.log.
+# Run manually or via cron: 0 3 * * 0 ~/.local/bin/claude-gc
+set -uo pipefail
+
+PANE_MAP_DIR="$HOME/.claude/pane-map"
+READY_LOG="$HOME/.claude/ready.log"
+MAX_AGE_DAYS=30
+MAX_LOG_LINES=500
+
+# Clean old pane-map files
+if [[ -d "$PANE_MAP_DIR" ]]; then
+  count=$(find "$PANE_MAP_DIR" -name '*.json' -mtime +${MAX_AGE_DAYS} 2>/dev/null | wc -l | tr -d ' ')
+  if [[ "$count" -gt 0 ]]; then
+    find "$PANE_MAP_DIR" -name '*.json' -mtime +${MAX_AGE_DAYS} -delete 2>/dev/null
+    echo "claude-gc: removed $count pane-map files older than ${MAX_AGE_DAYS} days"
+  else
+    echo "claude-gc: no pane-map files older than ${MAX_AGE_DAYS} days"
+  fi
+  remaining=$(find "$PANE_MAP_DIR" -name '*.json' 2>/dev/null | wc -l | tr -d ' ')
+  echo "claude-gc: $remaining pane-map files remaining"
+else
+  echo "claude-gc: no pane-map directory"
+fi
+
+# Trim ready.log to last N lines
+if [[ -f "$READY_LOG" ]]; then
+  total=$(wc -l < "$READY_LOG" | tr -d ' ')
+  if [[ "$total" -gt "$MAX_LOG_LINES" ]]; then
+    tmp=$(mktemp)
+    tail -n "$MAX_LOG_LINES" "$READY_LOG" > "$tmp"
+    mv "$tmp" "$READY_LOG"
+    trimmed=$((total - MAX_LOG_LINES))
+    echo "claude-gc: trimmed ready.log from $total to $MAX_LOG_LINES lines ($trimmed removed)"
+  else
+    echo "claude-gc: ready.log is $total lines (under $MAX_LOG_LINES limit)"
+  fi
+else
+  echo "claude-gc: no ready.log"
+fi
+
+# Clean hook error log if over 1000 lines
+ERROR_LOG="$HOME/.claude/hooks/error.log"
+if [[ -f "$ERROR_LOG" ]]; then
+  total=$(wc -l < "$ERROR_LOG" | tr -d ' ')
+  if [[ "$total" -gt 1000 ]]; then
+    tmp=$(mktemp)
+    tail -n 200 "$ERROR_LOG" > "$tmp"
+    mv "$tmp" "$ERROR_LOG"
+    echo "claude-gc: trimmed error.log from $total to 200 lines"
+  fi
+fi

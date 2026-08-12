@@ -1,0 +1,506 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.11"
+# dependencies = ["rich>=13.7"]
+# ///
+#
+# ~/.local/bin/claude-dash — Claude session dashboard.
+#
+# Usage:
+#   claude-dash            interactive live table (open via tmux popup: Prefix+d)
+#   claude-dash --counts   one-shot counter for tmux status bar: "⚡2 ✓1"
+#
+# Status taxonomy (mirrors claude-native.lua session_summary):
+#   working  last role=user AND file mtime <30s ago
+#   ready    last role=assistant OR (last role=user AND mtime <30m ago)
+#   idle     mtime >=30m ago
+#   fresh    no messages yet
+
+import json
+import os
+import pathlib
+import select
+import signal
+import subprocess
+import sys
+import termios
+import threading
+import time
+import tty
+
+from rich import box
+from rich.console import Console, Group as RGroup
+from rich.live import Live
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+PROJECTS_DIR = pathlib.Path.home() / ".claude" / "projects"
+PANE_MAP_DIR = pathlib.Path.home() / ".claude" / "pane-map"
+READY_LOG = pathlib.Path.home() / ".claude" / "ready.log"
+
+POLL_INTERVAL = 3.0
+
+STATUS_ICON  = {"working": "⚡", "ready": "✓", "idle": "·", "fresh": "○"}
+STATUS_STYLE = {"working": "bold yellow", "ready": "bold green", "idle": "dim", "fresh": "cyan"}
+STATUS_RANK  = {"working": 0, "ready": 1, "fresh": 2, "idle": 3}
+
+
+# ---------------------------------------------------------------------------
+# Session scanning (port of claude-native.lua session_summary)
+# ---------------------------------------------------------------------------
+
+def _extract_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
+
+
+def _is_meta(text: str) -> bool:
+    t = text.strip()
+    return not t or t.startswith("<")
+
+
+def session_summary(path: pathlib.Path, counts_only: bool = False) -> dict:
+    try:
+        st = os.stat(path)
+    except OSError:
+        return {"status": "fresh", "title": "(unreadable)", "age_sec": 0,
+                "tokens_in": 0, "tokens_out": 0}
+
+    age = time.time() - st.st_mtime
+
+    # Fast path for --counts: sessions older than 30m are always idle.
+    # Skips all file I/O for the vast majority of historical sessions.
+    if counts_only and age >= 1800:
+        return {"status": "idle", "title": "", "age_sec": int(age),
+                "tokens_in": 0, "tokens_out": 0}
+
+    last_role = None
+    title = None
+    tokens_in = tokens_out = 0
+    has_content = False
+
+    try:
+        # Head: first 200 lines for title extraction (skipped in counts_only mode).
+        head_lines: list[str] = []
+        if not counts_only:
+          with open(path, "rb") as f:
+            for _ in range(200):
+                line = f.readline()
+                if not line:
+                    break
+                head_lines.append(line.decode("utf-8", errors="replace"))
+
+        # Tail: last 16 KB for status / token detection.
+        with open(path, "rb") as f:
+            try:
+                f.seek(-16384, 2)
+            except OSError:
+                f.seek(0)
+            tail_lines = f.read().decode("utf-8", errors="replace").splitlines()
+
+        for raw in head_lines:
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            role = (ev.get("role")
+                    or (ev.get("message") or {}).get("role")
+                    or ev.get("type"))
+            if role == "user":
+                content = (ev.get("message") or {}).get("content") or ev.get("content")
+                text = _extract_text(content)
+                if not _is_meta(text):
+                    title = text.replace("\n", " ").strip()[:80]
+                    break
+
+        for raw in reversed(tail_lines):
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                ev = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            role = (ev.get("role")
+                    or (ev.get("message") or {}).get("role")
+                    or ev.get("type"))
+            if role in ("user", "assistant"):
+                has_content = True
+                if last_role is None:
+                    last_role = role
+            usage = (ev.get("message") or {}).get("usage") or ev.get("usage")
+            if isinstance(usage, dict):
+                tokens_in = usage.get("input_tokens") or tokens_in
+                tokens_out = usage.get("output_tokens") or tokens_out
+
+    except OSError:
+        pass
+
+    if not has_content:
+        status = "fresh"
+    elif age < 30 and last_role == "user":
+        status = "working"
+    elif age < 1800:
+        status = "ready"
+    else:
+        status = "idle"
+
+    return {
+        "status": status,
+        "title": title or "(no messages yet)",
+        "age_sec": int(age),
+        "tokens_in": tokens_in or 0,
+        "tokens_out": tokens_out or 0,
+    }
+
+
+def scan_sessions(counts_only: bool = False) -> list[dict]:
+    if not PROJECTS_DIR.exists():
+        return []
+    sessions: list[dict] = []
+    for project_dir in PROJECTS_DIR.iterdir():
+        if not project_dir.is_dir():
+            continue
+        for jsonl in project_dir.glob("*.jsonl"):
+            sid = jsonl.stem
+            summary = session_summary(jsonl, counts_only=counts_only)
+            # In counts_only mode, skip idle sessions with no pane entry.
+            if counts_only and summary["status"] == "idle":
+                sessions.append({"session_id": sid, "path": jsonl,
+                                  "pane_target": "", "worktree": "", **summary})
+                continue
+            pane_target = worktree = ""
+            pane_file = PANE_MAP_DIR / f"{sid}.json"
+            if pane_file.exists():
+                try:
+                    pdata = json.loads(pane_file.read_text())
+                    pane_target = pdata.get("pane_target", "")
+                    worktree = pdata.get("worktree", "")
+                except Exception:
+                    pass
+            sessions.append({
+                "session_id": sid,
+                "path": jsonl,
+                "pane_target": pane_target,
+                "worktree": worktree,
+                **summary,
+            })
+
+    sessions.sort(key=lambda s: (STATUS_RANK.get(s["status"], 9), s["age_sec"]))
+    return sessions
+
+
+def fmt_age(sec: int) -> str:
+    if sec < 60:
+        return f"{sec}s"
+    if sec < 3600:
+        return f"{sec // 60}m"
+    if sec < 86400:
+        return f"{sec // 3600}h"
+    return f"{sec // 86400}d"
+
+
+# ---------------------------------------------------------------------------
+# --counts mode
+# ---------------------------------------------------------------------------
+
+def counts_mode() -> None:
+    # Hard timeout so tmux status bar is never blocked.
+    def _timeout(*_):
+        sys.exit(0)
+    signal.signal(signal.SIGALRM, _timeout)
+    signal.setitimer(signal.ITIMER_REAL, 0.15)
+
+    sessions = scan_sessions(counts_only=True)
+    counts: dict[str, int] = {}
+    for s in sessions:
+        counts[s["status"]] = counts.get(s["status"], 0) + 1
+
+    parts = []
+    if counts.get("working"):
+        parts.append(f"⚡{counts['working']}")
+    if counts.get("ready"):
+        parts.append(f"✓{counts['ready']}")
+    if not parts and counts.get("idle"):
+        parts.append(f"·{counts['idle']}")
+
+    print(" ".join(parts), end="")
+    signal.setitimer(signal.ITIMER_REAL, 0)
+
+
+# ---------------------------------------------------------------------------
+# Interactive mode
+# ---------------------------------------------------------------------------
+
+def make_table(sessions: list[dict], selected_idx: int, filter_str: str = "") -> Table:
+    table = Table(
+        box=box.SIMPLE_HEAD,
+        show_header=True,
+        header_style="bold",
+        expand=True,
+        padding=(0, 1),
+    )
+    table.add_column("", width=2, no_wrap=True)
+    table.add_column("Status", width=8, no_wrap=True)
+    table.add_column("Worktree / Session", width=20, no_wrap=True)
+    table.add_column("Title", ratio=1)
+    table.add_column("Age", width=5, no_wrap=True, justify="right")
+    table.add_column("Tokens", width=11, no_wrap=True, justify="right")
+
+    visible_idx = 0
+    for s in sessions:
+        label = s["worktree"] or s["session_id"][:12]
+        if filter_str and filter_str.lower() not in (
+            s["title"] + label + s["session_id"]
+        ).lower():
+            continue
+        st = s["status"]
+        style = STATUS_STYLE.get(st, "")
+        row_style = "on grey11" if visible_idx == selected_idx else ""
+        tok = (
+            f"{s['tokens_in']//1000}k/{s['tokens_out']//1000}k"
+            if s["tokens_in"]
+            else "-"
+        )
+        table.add_row(
+            Text(STATUS_ICON.get(st, "?"), style=style),
+            Text(st[:7], style=style),
+            Text(label[:20], style=style),
+            Text(s["title"][:80]),
+            Text(fmt_age(s["age_sec"])),
+            Text(tok, style="dim"),
+            style=row_style,
+        )
+        visible_idx += 1
+
+    return table
+
+
+def filtered(sessions: list[dict], filter_str: str) -> list[dict]:
+    if not filter_str:
+        return sessions
+    q = filter_str.lower()
+    return [
+        s for s in sessions
+        if q in (s["title"] + (s["worktree"] or "") + s["session_id"]).lower()
+    ]
+
+
+def read_ready_log_tail(pos: int) -> tuple[list[dict], int]:
+    if not READY_LOG.exists():
+        return [], pos
+    try:
+        with open(READY_LOG, "rb") as f:
+            f.seek(0, 2)
+            end = f.tell()
+            if end <= pos:
+                return [], pos
+            f.seek(pos)
+            chunk = f.read().decode("utf-8", errors="replace")
+        entries = []
+        for line in chunk.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                pass
+        return entries, end
+    except OSError:
+        return [], pos
+
+
+def tmux_jump(pane_target: str) -> None:
+    if pane_target:
+        subprocess.run(["tmux", "select-window", "-t", pane_target],
+                       capture_output=True)
+
+
+def tmux_resume(session_id: str) -> None:
+    subprocess.run(
+        ["tmux", "new-window", "-n", f"resume-{session_id[:8]}",
+         f"claude --resume {session_id}"],
+        capture_output=True,
+    )
+
+
+def interactive_mode() -> None:
+    console = Console()
+    sessions = scan_sessions()
+    selected_idx = 0
+    filter_str = ""
+    filter_mode = False
+    banner_text = ""
+    banner_until = 0.0
+    last_poll = 0.0
+
+    # Seed log position to current end so we only tail new events.
+    ready_log_pos = READY_LOG.stat().st_size if READY_LOG.exists() else 0
+
+    # Show any recent (last 60s) stop event as an opening banner.
+    if READY_LOG.exists():
+        try:
+            for line in reversed(READY_LOG.read_text().splitlines()):
+                try:
+                    e = json.loads(line)
+                    if e.get("event") == "stop" and time.time() - e.get("ts", 0) < 60:
+                        wt = e.get("worktree", "")
+                        banner_text = f"✓ {wt} — {e.get('title', '')[:50]}"
+                        banner_until = time.time() + 10
+                        break
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Keyboard reader thread: puts single chars into key_queue.
+    key_queue: list[str] = []
+    key_lock = threading.Lock()
+    stop_event = threading.Event()
+
+    def key_reader() -> None:
+        fd = sys.stdin.fileno()
+        old = termios.tcgetattr(fd)
+        try:
+            tty.setraw(fd)
+            while not stop_event.is_set():
+                r, _, _ = select.select([sys.stdin], [], [], 0.05)
+                if r:
+                    ch = sys.stdin.read(1)
+                    with key_lock:
+                        key_queue.append(ch)
+        except Exception:
+            pass
+        finally:
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old)
+            except Exception:
+                pass
+
+    key_thread = threading.Thread(target=key_reader, daemon=True)
+    key_thread.start()
+
+    pending_action: dict = {}
+    running = True
+
+    with Live(console=console, auto_refresh=False, screen=True) as live:
+        while running:
+            now = time.time()
+
+            if now - last_poll >= POLL_INTERVAL:
+                sessions = scan_sessions()
+                last_poll = now
+
+            new_entries, ready_log_pos = read_ready_log_tail(ready_log_pos)
+            if new_entries:
+                latest = new_entries[-1]
+                evt = latest.get("event", "")
+                wt = latest.get("worktree", "")
+                msg = latest.get("title", latest.get("message", ""))[:50]
+                banner_text = ("✓ " if evt == "stop" else "! ") + f"{wt} — {msg}"
+                banner_until = now + 10
+                sessions = scan_sessions()
+                last_poll = now
+
+            if banner_text and now > banner_until:
+                banner_text = ""
+
+            vis = filtered(sessions, filter_str)
+            selected_idx = min(selected_idx, max(0, len(vis) - 1))
+
+            renderables: list = []
+            if banner_text:
+                bstyle = "bold green" if banner_text.startswith("✓") else "bold yellow"
+                renderables.append(Panel(banner_text, style=bstyle, height=3))
+            if filter_str or filter_mode:
+                suffix = "..." if filter_mode else "  (Esc to clear)"
+                renderables.append(
+                    Text(f"  filter: {filter_str}{suffix}", style="dim")
+                )
+            if vis:
+                renderables.append(make_table(vis, selected_idx, filter_str))
+            else:
+                renderables.append(Text("  No sessions found.", style="dim"))
+            renderables.append(
+                Text(
+                    "  j/k navigate   Enter jump   r resume   / filter   q quit",
+                    style="dim",
+                )
+            )
+
+            live.update(RGroup(*renderables))
+            live.refresh()
+
+            with key_lock:
+                keys = list(key_queue)
+                key_queue.clear()
+
+            for ch in keys:
+                if filter_mode:
+                    if ch in ("\r", "\n"):
+                        filter_mode = False
+                    elif ch == "\x1b":
+                        filter_str = ""
+                        filter_mode = False
+                    elif ch in ("\x7f", "\x08"):
+                        filter_str = filter_str[:-1]
+                    else:
+                        filter_str += ch
+                else:
+                    if ch in ("q", "Q", "\x03"):
+                        running = False
+                        break
+                    elif ch == "j":
+                        selected_idx = min(selected_idx + 1, max(0, len(vis) - 1))
+                    elif ch == "k":
+                        selected_idx = max(selected_idx - 1, 0)
+                    elif ch == "\r":
+                        if 0 <= selected_idx < len(vis):
+                            pt = vis[selected_idx].get("pane_target", "")
+                            if pt:
+                                pending_action = {"type": "jump", "pane_target": pt}
+                                running = False
+                                break
+                    elif ch == "r":
+                        if 0 <= selected_idx < len(vis):
+                            sid = vis[selected_idx]["session_id"]
+                            pending_action = {"type": "resume", "session_id": sid}
+                            running = False
+                            break
+                    elif ch == "/":
+                        filter_mode = True
+                        filter_str = ""
+                    elif ch == "\x1b":
+                        filter_str = ""
+                        filter_mode = False
+
+            time.sleep(0.05)
+
+    stop_event.set()
+
+    # Execute deferred actions after Live exits (restores terminal first).
+    if pending_action.get("type") == "jump":
+        tmux_jump(pending_action["pane_target"])
+    elif pending_action.get("type") == "resume":
+        tmux_resume(pending_action["session_id"])
+
+
+# ---------------------------------------------------------------------------
+
+def main() -> None:
+    if len(sys.argv) > 1 and sys.argv[1] == "--counts":
+        counts_mode()
+    else:
+        interactive_mode()
+
+
+if __name__ == "__main__":
+    main()

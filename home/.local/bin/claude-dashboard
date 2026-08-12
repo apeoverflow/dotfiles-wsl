@@ -1,0 +1,240 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-dashboard — gather git and worktree context across all
+# repos in the current tmux session, then pipe to claude for a summary.
+# Usage: claude-dashboard [--refresh]
+set -uo pipefail
+
+cache_file="$HOME/.claude/dashboard-cache.md"
+cache_max_age=300  # 5 minutes
+
+if [[ "${1:-}" != "--refresh" && -f "$cache_file" ]]; then
+  cache_age=$(( $(date +%s) - $(stat -c %Y "$cache_file" 2>/dev/null || stat -f %m "$cache_file" 2>/dev/null || echo 0) ))
+  if [[ "$cache_age" -lt "$cache_max_age" ]]; then
+    cat "$cache_file" >/dev/null
+    printf '\n\033[2m(cached %ss ago — Prefix+I to refresh)\033[0m\n' "$cache_age"
+    exit 0
+  fi
+fi
+
+printf 'Gathering context...\n'
+
+context=""
+seen_repos=("")
+
+gather_repo() {
+  local repo_root="$1"
+
+  # Skip if already processed
+  for seen in "${seen_repos[@]}"; do
+    [[ "$seen" == "$repo_root" ]] && return
+  done
+  seen_repos+=("$repo_root")
+
+  local repo_name
+  repo_name=$(basename "$repo_root")
+  local branch
+  branch=$(git -C "$repo_root" branch --show-current 2>/dev/null) || true
+
+  context+="
+## ${repo_name} (${repo_root})
+### Main working tree — branch: ${branch:-detached}
+"
+
+  # Staged changes
+  local staged
+  staged=$(git -C "$repo_root" diff --cached --stat 2>/dev/null) || true
+  if [[ -n "$staged" ]]; then
+    context+="**Staged changes:**
+\`\`\`
+${staged}
+\`\`\`
+"
+  fi
+
+  # Unstaged changes
+  local unstaged
+  unstaged=$(git -C "$repo_root" diff --stat 2>/dev/null) || true
+  if [[ -n "$unstaged" ]]; then
+    context+="**Unstaged changes:**
+\`\`\`
+${unstaged}
+\`\`\`
+"
+  fi
+
+  # Untracked files
+  local untracked
+  untracked=$(git -C "$repo_root" ls-files --others --exclude-standard 2>/dev/null | head -20) || true
+  if [[ -n "$untracked" ]]; then
+    context+="**Untracked files:**
+\`\`\`
+${untracked}
+\`\`\`
+"
+  fi
+
+  # Recent commits on current branch (not on base)
+  local base_branch
+  base_branch=$(git -C "$repo_root" rev-parse --abbrev-ref HEAD@{upstream} 2>/dev/null | sed 's|origin/||') || true
+  [[ -z "$base_branch" ]] && base_branch="main"
+
+  local recent
+  recent=$(git -C "$repo_root" log --oneline -10 --no-merges 2>/dev/null) || true
+  if [[ -n "$recent" ]]; then
+    context+="**Recent commits:**
+\`\`\`
+${recent}
+\`\`\`
+"
+  fi
+
+  # Worktrees
+  local worktree_list
+  worktree_list=$(git -C "$repo_root" worktree list --porcelain 2>/dev/null) || true
+  if [[ -n "$worktree_list" ]]; then
+    local wt_path="" wt_branch="" first=true
+    while IFS= read -r line; do
+      if [[ "$line" == "worktree "* ]]; then
+        # Emit previous worktree (skip main)
+        if [[ "$first" != true && -n "$wt_path" && "$wt_path" != "$repo_root" ]]; then
+          emit_worktree "$wt_path" "$wt_branch"
+        fi
+        first=false
+        wt_path="${line#worktree }"
+        wt_branch=""
+      elif [[ "$line" == "branch "* ]]; then
+        wt_branch="${line#branch refs/heads/}"
+      fi
+    done <<< "$worktree_list"
+    # Emit last one
+    if [[ -n "$wt_path" && "$wt_path" != "$repo_root" ]]; then
+      emit_worktree "$wt_path" "$wt_branch"
+    fi
+  fi
+}
+
+emit_worktree() {
+  local wt_path="$1" wt_branch="$2"
+  local wt_name
+  wt_name=$(basename "$wt_path")
+
+  context+="
+### Worktree: ${wt_name} — branch: ${wt_branch:-detached}
+"
+
+  # Staged
+  local staged
+  staged=$(git -C "$wt_path" diff --cached --stat 2>/dev/null) || true
+  if [[ -n "$staged" ]]; then
+    context+="**Staged:**
+\`\`\`
+${staged}
+\`\`\`
+"
+  fi
+
+  # Unstaged
+  local unstaged
+  unstaged=$(git -C "$wt_path" diff --stat 2>/dev/null) || true
+  if [[ -n "$unstaged" ]]; then
+    context+="**Unstaged:**
+\`\`\`
+${unstaged}
+\`\`\`
+"
+  fi
+
+  # Branch commits ahead of base
+  local ahead
+  ahead=$(git -C "$wt_path" log --oneline -10 --no-merges "${wt_branch}@{upstream}..HEAD" 2>/dev/null) || true
+  if [[ -z "$ahead" ]]; then
+    ahead=$(git -C "$wt_path" log --oneline -10 --no-merges "main..HEAD" 2>/dev/null) || true
+  fi
+  if [[ -n "$ahead" ]]; then
+    context+="**Commits (ahead of base):**
+\`\`\`
+${ahead}
+\`\`\`
+"
+  fi
+
+  # Check if a claude session is active on this worktree
+  for mapfile in ~/.claude/pane-map/*.json; do
+    [[ -f "$mapfile" ]] || continue
+    local map_wt
+    map_wt=$(jq -r '.worktree // empty' "$mapfile" 2>/dev/null) || continue
+    local clean_name="${wt_name%+}"
+    if [[ "$map_wt" == "$wt_name" || "$map_wt" == "$clean_name" ]]; then
+      local pt
+      pt=$(jq -r '.pane_target // empty' "$mapfile" 2>/dev/null)
+      if tmux has-session -t "$pt" 2>/dev/null; then
+        context+="**Claude session:** active (${pt})
+"
+      else
+        context+="**Claude session:** finished
+"
+      fi
+      break
+    fi
+  done
+}
+
+# Discover repos from all tmux pane paths
+while IFS= read -r path; do
+  repo_root=$(git -C "$path" rev-parse --show-toplevel 2>/dev/null) || continue
+  gather_repo "$repo_root"
+done < <(tmux list-panes -a -F '#{pane_current_path}' | sort -u)
+
+# Capture visible output from each tmux pane
+context+="
+## Tmux pane output snapshots
+"
+while IFS=$'\t' read -r pane_id sess_win name cmd; do
+  local_capture=$(tmux capture-pane -t "$pane_id" -p -S -200 2>/dev/null | sed '/^$/d') || true
+  if [[ -n "$local_capture" ]]; then
+    context+="
+### ${sess_win} — ${name} (${cmd})
+\`\`\`
+${local_capture}
+\`\`\`
+"
+  fi
+done < <(tmux list-panes -a -F '#{pane_id}	#{session_name}:#{window_index}	#{window_name}	#{pane_current_command}')
+
+# Recent ready.log events (last 24h)
+if [[ -f ~/.claude/ready.log ]]; then
+  cutoff=$(( $(date +%s) - 86400 ))
+  recent_events=$(tail -100 ~/.claude/ready.log | while IFS= read -r line; do
+    ts=$(printf '%s' "$line" | jq -r '.ts // 0' 2>/dev/null) || continue
+    [[ "$ts" -lt "$cutoff" ]] && continue
+    event=$(printf '%s' "$line" | jq -r '.event // empty' 2>/dev/null)
+    title=$(printf '%s' "$line" | jq -r '.title // empty' 2>/dev/null)
+    wt=$(printf '%s' "$line" | jq -r '.worktree // empty' 2>/dev/null)
+    time=$(date -r "$ts" "+%H:%M" 2>/dev/null || date -d "@$ts" "+%H:%M" 2>/dev/null)
+    printf '%s  %-8s  %-20s  %s\n' "$time" "$event" "$wt" "${title:0:80}"
+  done)
+  if [[ -n "$recent_events" ]]; then
+    context+="
+## Recent claude events (last 24h)
+\`\`\`
+${recent_events}
+\`\`\`
+"
+  fi
+fi
+
+prompt="You are a development status analyst. Given the following git state across repos and worktrees, provide a concise dashboard:
+
+1. **Active workstreams** — group by repo/project. For each branch or worktree, describe what's being worked on based on branch name, commit messages, and changed files.
+2. **Current status** — note what has uncommitted/staged work vs clean state, and whether a claude session is active.
+3. **Recent progress** — summarize the most meaningful recent commits and changes.
+4. **Suggestions** — flag worktrees that look done (clean, no commits ahead), dead claude sessions to clean up, or branches ready to merge.
+
+Keep it concise and scannable. Use markdown.
+
+${context}"
+
+printf '\033[2K\rGenerating summary...\n'
+output=$(claude -p "$prompt" --model claude-sonnet-4-6 2>/dev/null)
+printf '%s' "$output" > "$cache_file"
+printf '\033[2K\r'

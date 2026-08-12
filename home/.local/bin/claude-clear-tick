@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Called by tmux after-select-window hook. Strips "✓ "/"! " prefix from window name.
+name=$(tmux display-message -p '#{window_name}')
+if [[ "$name" == "✓ "* ]]; then
+  tmux rename-window "${name#✓ }"
+elif [[ "$name" == "! "* ]]; then
+  tmux rename-window "${name#! }"
+fi

@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-commit — stage and commit all changes.
+# Called by: bind b run-shell "~/.local/bin/claude-commit"
+set -euo pipefail
+
+pane_dir=$(tmux display-message -p '#{pane_current_path}')
+cd "$pane_dir"
+
+git rev-parse --git-dir >/dev/null 2>&1 || {
+  tmux display-message "Not a git repo"; exit 1
+}
+
+branch=$(git branch --show-current)
+[[ -z "$branch" ]] && { tmux display-message "No branch checked out"; exit 1; }
+
+# Don't commit from protected branches
+case "$branch" in main|dev|develop|staging|production|master)
+  tmux display-message "Won't commit from $branch — use a feature branch"
+  exit 1
+;; esac
+
+# Nothing to commit?
+if git diff --quiet && git diff --cached --quiet && [[ -z "$(git ls-files --others --exclude-standard)" ]]; then
+  tmux display-message "Nothing to commit"
+  exit 0
+fi
+
+# Stage everything
+git add -A
+
+if git diff --cached --quiet; then
+  tmux display-message "Nothing to commit"
+  exit 0
+fi
+
+diff=$(git diff --cached --stat; echo "---"; git diff --cached -- . ':(exclude)*.lock' ':(exclude)package-lock.json' | head -300 || true)
+
+tmux display-message "Generating commit message..."
+
+msg=$(set +o pipefail; printf '%s' "$diff" | "$HOME/.local/bin/claude" -p \
+  "Write a git commit message for these changes on branch '${branch}'.
+Use conventional commit format. First line under 72 chars. Add a blank line then 1-3 bullet points if needed.
+Output ONLY the commit message, nothing else." \
+  --model claude-sonnet-4-6 2>/dev/null) || msg=""
+[[ -z "$msg" ]] && msg="wip: ${branch} — in-progress work"
+
+git commit -m "$msg" >/dev/null 2>&1 || {
+  tmux display-message "Commit failed"; exit 1
+}
+
+first_line=$(echo "$msg" | head -1)
+tmux display-message "Committed: ${first_line}"

@@ -1,0 +1,14 @@
+# macOS
+.DS_Store
+
+# never track runtime state or secrets that might land here by accident
+*.log
+home/.claude/projects/
+home/.claude/pane-map/
+home/.claude/backups/
+home/.claude.json
+home/.claude/history.jsonl
+home/.tmux/ai-persist/
+home/.tmux/plugins/
+home/.local/share/
+.dotfiles-backup/

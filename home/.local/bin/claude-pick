@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-pick — fzf picker of recent Claude stop events.
+# Shows all sessions that finished in the last 8 hours, newest first.
+# Selecting one jumps to its tmux window.
+set -uo pipefail
+
+log="$HOME/.claude/ready.log"
+[[ -f "$log" ]] || { echo "no sessions yet"; sleep 2; exit 0; }
+
+command -v fzf >/dev/null 2>&1 || { echo "brew install fzf"; sleep 2; exit 1; }
+
+cutoff=$(( $(date +%s) - 28800 ))  # 8 hours ago
+
+# Build list: "HH:MM  worktree  title  |  pane_target"
+# Newest first via tail -r, deduplicated by session_id, filter to stop events within cutoff.
+seen_file=$(mktemp)
+trap "rm -f $seen_file" EXIT
+entries=$(tail -r "$log" | while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  ts=$(printf '%s' "$line"     | jq -r '.ts          // 0'     2>/dev/null) || continue
+  [[ "$ts" -lt "$cutoff" ]] && break
+  event=$(printf '%s' "$line"  | jq -r '.event       // empty' 2>/dev/null) || continue
+  [[ "$event" == "stop" ]] || continue
+  sid=$(printf '%s' "$line"    | jq -r '.session_id  // empty' 2>/dev/null) || continue
+  if [[ -n "$sid" ]] && grep -qF "$sid" "$seen_file" 2>/dev/null; then continue; fi
+  printf '%s\n' "$sid" >> "$seen_file"
+  wt=$(printf '%s' "$line"     | jq -r '.worktree    // ""'    2>/dev/null)
+  title=$(printf '%s' "$line"  | jq -r '.title       // ""'    2>/dev/null)
+  pt=$(printf '%s' "$line"     | jq -r '.pane_target // ""'    2>/dev/null)
+  time=$(date -r "$ts" "+%H:%M" 2>/dev/null || date -d "@$ts" "+%H:%M" 2>/dev/null)
+  printf '%s  %-16s  %s\t%s\n' "$time" "$wt" "${title:0:60}" "$pt"
+done)
+
+[[ -z "$entries" ]] && { echo "no recent sessions"; sleep 2; exit 0; }
+
+selected=$(printf '%s\n' "$entries" | fzf \
+  --prompt="jump to session > " \
+  --height=40% \
+  --reverse \
+  --no-sort \
+  --with-nth=1,2,3 \
+  --delimiter='\t')
+
+[[ -z "$selected" ]] && exit 0
+
+pane_target=$(printf '%s' "$selected" | awk -F'\t' '{print $2}')
+[[ -z "$pane_target" ]] && { echo "no pane target for this session"; sleep 2; exit 0; }
+
+tmux select-window -t "$pane_target" 2>/dev/null || \
+  { echo "pane gone: $pane_target"; sleep 2; }

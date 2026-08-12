@@ -1,0 +1,22 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-jump — jump to the most recently finished Claude session.
+# Reads ~/.claude/ready.log (newest entry first via tail -r) and calls
+# tmux select-window on its pane_target.
+# Called by: bind j run-shell "~/.local/bin/claude-jump"
+set -uo pipefail
+
+log="$HOME/.claude/ready.log"
+[[ -f "$log" ]] || exit 0
+
+# tail -r reverses line order (macOS BSD tail). Walk from newest to oldest,
+# find the first stop event with a non-empty pane_target.
+pane_target=$(tail -r "$log" | while IFS= read -r line; do
+  [[ -z "$line" ]] && continue
+  event=$(printf '%s' "$line" | jq -r '.event // empty' 2>/dev/null) || continue
+  [[ "$event" == "stop" ]] || continue
+  pt=$(printf '%s' "$line" | jq -r '.pane_target // empty' 2>/dev/null) || continue
+  [[ -n "$pt" ]] && printf '%s\n' "$pt" && break
+done | head -1)
+
+[[ -n "${pane_target:-}" ]] || exit 0
+tmux select-window -t "$pane_target" 2>/dev/null || true

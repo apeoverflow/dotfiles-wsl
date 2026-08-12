@@ -1,0 +1,132 @@
+#!/usr/bin/env bash
+# ~/.local/bin/claude-sync — pull test/ branch commits into the working branch.
+# Called by: bind T display-popup -E ... "~/.local/bin/claude-sync"
+#
+# Works from either the working branch or the test/* branch.
+# Merges all commits from test/branch that aren't on the working branch.
+set -euo pipefail
+
+pane_dir=$(tmux display-message -p '#{pane_current_path}')
+cd "$pane_dir"
+
+git rev-parse --git-dir >/dev/null 2>&1 || {
+  echo "Not a git repo"; exit 1
+}
+
+branch=$(git branch --show-current)
+[[ -z "$branch" ]] && { echo "No branch checked out"; exit 1; }
+
+# If on a test branch, resolve the working branch
+if [[ "$branch" == test/* ]]; then
+  work_branch="${branch#test/}"
+  test_branch="$branch"
+  on_test=true
+else
+  work_branch="$branch"
+  test_branch="test/${branch}"
+  on_test=false
+fi
+
+# Verify test branch exists
+if ! git rev-parse --verify "refs/heads/$test_branch" >/dev/null 2>&1; then
+  echo "No test branch '$test_branch' found — nothing to sync."
+  exit 0
+fi
+
+# -- Repo-level lock to prevent concurrent commit/sync operations ------------
+git_dir=$(git rev-parse --absolute-git-dir)
+lockdir="${git_dir}/claude-commit-sync.lock"
+if ! mkdir "$lockdir" 2>/dev/null; then
+  lock_pid=$(cat "$lockdir/pid" 2>/dev/null || echo "")
+  if [[ -n "$lock_pid" ]] && kill -0 "$lock_pid" 2>/dev/null; then
+    echo "Another commit/sync is running — try again"
+    read -rp "Press Enter to close..."
+    exit 1
+  fi
+  rm -rf "$lockdir"
+  mkdir "$lockdir" 2>/dev/null || { echo "Failed to acquire lock"; exit 1; }
+fi
+echo $$ > "$lockdir/pid"
+trap 'rm -rf "$lockdir"' EXIT
+
+# Check for diverged commits
+ahead=$(git rev-list --count "$work_branch".."$test_branch" 2>/dev/null || echo 0)
+
+if [[ "$ahead" -eq 0 ]]; then
+  echo "Already in sync — $test_branch has no extra commits."
+  read -rp "Press Enter to close..."
+  exit 0
+fi
+
+echo "$test_branch has $ahead commit(s) not on $work_branch:"
+echo ""
+git log --oneline "$work_branch".."$test_branch"
+echo ""
+
+# If on test branch, switch to working branch to perform the merge
+if [[ "$on_test" == true ]]; then
+  # Check for uncommitted changes in test worktree first
+  if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+    echo "⚠ Uncommitted changes on $test_branch — commit or stash first."
+    read -rp "Press Enter to close..."
+    exit 1
+  fi
+
+  echo "Switching from $test_branch to $work_branch for merge..."
+  if ! git checkout "$work_branch" 2>/dev/null; then
+    echo "✗ Failed to switch to $work_branch"
+    read -rp "Press Enter to close..."
+    exit 1
+  fi
+  switched=true
+else
+  switched=false
+fi
+
+# Check for uncommitted changes on working branch
+if ! git diff --quiet || ! git diff --cached --quiet || [[ -n "$(git ls-files --others --exclude-standard)" ]]; then
+  echo "⚠ You have uncommitted changes. Stashing them first..."
+  git stash push --include-untracked -m "claude-sync: pre-merge stash"
+  stashed=true
+else
+  stashed=false
+fi
+
+# Capture test branch ref before merge for atomic update
+old_test=$(git rev-parse "refs/heads/$test_branch" 2>/dev/null || echo "")
+
+# Merge test branch into working branch
+echo "Merging $test_branch into $work_branch..."
+if git merge --no-edit "$test_branch"; then
+  echo ""
+  echo "✓ Merged $ahead commit(s) from $test_branch"
+  # Atomic update: fail if test branch moved during merge
+  new_head=$(git rev-parse HEAD)
+  if [[ -n "$old_test" ]]; then
+    if ! git update-ref "refs/heads/$test_branch" "$new_head" "$old_test" 2>/dev/null; then
+      echo "⚠ $test_branch was modified during sync — run sync again to reconcile"
+    fi
+  else
+    git update-ref "refs/heads/$test_branch" "$new_head" 2>/dev/null || true
+  fi
+else
+  echo ""
+  echo "✗ Merge conflict. Resolve conflicts, then commit."
+  echo "  After resolving: git add -A && git commit"
+fi
+
+if [[ "$stashed" == true ]]; then
+  echo ""
+  echo "Restoring stashed changes..."
+  git stash pop 2>/dev/null || echo "⚠ Stash pop had conflicts — check 'git stash list'"
+fi
+
+# Switch back to test branch if we came from there
+if [[ "$switched" == true ]]; then
+  echo ""
+  echo "Switching back to $test_branch..."
+  git checkout "$test_branch" 2>/dev/null || echo "⚠ Failed to switch back to $test_branch"
+fi
+
+echo ""
+read -rp "Press Enter to close..."

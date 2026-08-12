@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+# ~/.local/bin/cws — Switch to a recent Claude/Copilot session via fzf.
+exec ~/.local/bin/claude-pick

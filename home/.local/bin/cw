@@ -1,0 +1,178 @@
+#!/usr/bin/env bash
+# ~/.local/bin/cw — Worktree launcher for Claude Code and GitHub Copilot CLI.
+# Creates a git worktree + tmux window, registers the session in pane-map.
+#
+# Usage: cw <name> [-c] [-d|-s|-sd] [--agent <agent>] [-- <extra-args...>]
+#
+#   (default)   claude  Opus 4.7   + auto permission mode
+#   -d          claude  Opus 4.7   + dangerously-skip-permissions
+#   -s          claude  Sonnet 4.6 + normal mode (prompts enabled)
+#   -sd         claude  Sonnet 4.6 + dangerously-skip-permissions
+#   -nw         claude  no worktree, runs in current directory
+#   -c          copilot Opus 4.6   + allow-all-tools
+#   -c -s       copilot Sonnet 4.6 + allow-all-tools
+#   -c -n       copilot Opus 4.6   + normal mode (prompts enabled)
+set -euo pipefail
+
+export PATH="$HOME/.local/bin:$PATH"
+
+usage() {
+  printf 'usage: cw <name> [-c] [-d|-s|-sd|-n] [--agent <agent>] [-- <extra-args...>]\n' >&2
+  exit 1
+}
+
+[[ $# -eq 0 ]] && usage
+name="$1"; shift
+
+tool="claude"
+agent=""
+model=""
+permission_mode="auto"
+no_worktree=false
+extra_args=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -c)        tool="copilot"; shift ;;
+    -d)        permission_mode="bypass"; shift ;;
+    -s)        model="sonnet"; permission_mode=""; shift ;;
+    -sd)       model="sonnet"; permission_mode="bypass"; shift ;;
+    -n)        permission_mode=""; shift ;;
+    -nw)       no_worktree=true; shift ;;
+    --agent)   agent="${2:?--agent requires a value}"; shift 2 ;;
+    -h|--help) usage ;;
+    --)        shift; extra_args+=("$@"); break ;;
+    *)         extra_args+=("$1"); shift ;;
+  esac
+done
+
+# Resolve model name per tool
+if [[ "$tool" == "copilot" ]]; then
+  [[ "$model" == "sonnet" ]] && model="claude-sonnet-4.6" || model="claude-opus-4.6"
+else
+  [[ "$model" == "sonnet" ]] && model="claude-sonnet-4-6" || model="claude-opus-4-7"
+fi
+
+printf 'cw: launching %s (%s)\n' "$tool" "$model"
+
+# Pre-flight checks
+[[ -n "${TMUX:-}" ]] || {
+  printf 'cw: must be run inside a tmux session\n' >&2; exit 1
+}
+command -v "$tool" >/dev/null 2>&1 || {
+  printf 'cw: %s not found on $PATH\n' "$tool" >&2; exit 1
+}
+command -v jq >/dev/null 2>&1 || {
+  printf 'cw: jq not found — brew install jq\n' >&2; exit 1
+}
+if ! git rev-parse --git-dir >/dev/null 2>&1; then
+  printf 'cw: not a git repo — initialising\n'
+  git init >/dev/null 2>&1
+fi
+if ! git rev-parse HEAD >/dev/null 2>&1; then
+  printf 'cw: no commits — creating initial commit\n'
+  git commit --allow-empty -m "initial commit" >/dev/null 2>&1
+fi
+
+session_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
+mkdir -p ~/.claude/pane-map
+
+repo_root=$(git rev-parse --show-toplevel)
+worktree_dir="${repo_root}/.claude/worktrees/${name}"
+
+# Clean stale worktree entries (e.g. directory deleted without `git worktree remove`)
+git worktree prune 2>/dev/null || true
+
+if [[ "$no_worktree" == true ]]; then
+  window_name="$name"
+  launch_dir="$(pwd)"
+elif [[ -d "$worktree_dir" ]]; then
+  window_name="${name}+"
+  launch_dir="$worktree_dir"
+else
+  # Create worktree — reuse existing branch or create a new one from current branch
+  mkdir -p "$(dirname "$worktree_dir")"
+  if git show-ref --verify --quiet "refs/heads/$name" 2>/dev/null; then
+    git worktree add "$worktree_dir" "$name" 2>/dev/null || {
+      printf 'cw: failed to create worktree\n' >&2; exit 1
+    }
+  else
+    current_branch=$(git branch --show-current)
+    git worktree add -b "$name" "$worktree_dir" "${current_branch:-HEAD}" 2>/dev/null || {
+      printf 'cw: failed to create worktree\n' >&2; exit 1
+    }
+  fi
+  window_name="$name"
+  launch_dir="$worktree_dir"
+fi
+
+# Build tool-specific args
+tool_args=()
+if [[ "$tool" == "claude" ]]; then
+  tool_args+=("--session-id" "$session_id" "--name" "$window_name" "--model" "$model")
+  if [[ "$permission_mode" == "bypass" ]]; then
+    tool_args+=("--dangerously-skip-permissions")
+  elif [[ -n "$permission_mode" ]]; then
+    tool_args+=("--permission-mode" "$permission_mode")
+  fi
+  [[ -n "$agent" ]] && tool_args+=("--agent" "$agent")
+else
+  # copilot
+  tool_args+=("--model" "$model")
+  if [[ "$permission_mode" != "" ]]; then
+    tool_args+=("--allow-all-tools")
+  fi
+  [[ -n "$agent" ]] && tool_args+=("--agent" "$agent")
+fi
+
+[[ ${#extra_args[@]} -gt 0 ]] && tool_args+=("${extra_args[@]}")
+
+bootstrap=$(mktemp /tmp/cw-XXXXXX.sh)
+quoted_args=$(printf '%q ' "${tool_args[@]}")
+quoted_dir=$(printf '%q' "$launch_dir")
+osc2_id="${tool}:${session_id}"
+
+cat > "$bootstrap" << BOOTSTRAP
+#!/usr/bin/env bash
+rm -f $(printf '%q' "$bootstrap")
+cd ${quoted_dir}
+printf '\033]2;${osc2_id}\033\\'
+printf '%s\n' "exec ${tool} ${quoted_args}" > /tmp/cw-debug.log
+exec ${tool} ${quoted_args}
+BOOTSTRAP
+chmod +x "$bootstrap"
+
+pane_target=$(tmux new-window -P -F '#{session_name}:#{window_index}.#{pane_index}' \
+  -n "$window_name" "$bootstrap")
+
+# Resolve base branch — skip test/ prefixes to find the real base.
+# If on test/foo, look up foo's pane-map for the original base_branch.
+# If on a normal branch, use it directly.
+base_branch=$(git branch --show-current 2>/dev/null || echo "main")
+if [[ "$base_branch" == test/* ]]; then
+  inner="${base_branch#test/}"
+  resolved=""
+  for mapfile in ~/.claude/pane-map/*.json; do
+    [[ -f "$mapfile" ]] || continue
+    wt=$(jq -r '.worktree // empty' "$mapfile" 2>/dev/null) || continue
+    if [[ "$wt" == "$inner" || "$wt" == "${inner}+" ]]; then
+      resolved=$(jq -r '.base_branch // empty' "$mapfile" 2>/dev/null) || true
+      [[ -n "$resolved" ]] && break
+    fi
+  done
+  if [[ -n "$resolved" && "$resolved" != test/* ]]; then
+    base_branch="$resolved"
+  else
+    base_branch="main"
+  fi
+fi
+jq -n \
+  --arg sid  "$session_id" \
+  --arg pt   "$pane_target" \
+  --arg wt   "$window_name" \
+  --arg cwd  "$(pwd)" \
+  --arg tool "$tool" \
+  --arg base "$base_branch" \
+  '{"session_id":$sid,"pane_target":$pt,"worktree":$wt,"cwd":$cwd,"tool":$tool,"base_branch":$base}' \
+  > ~/.claude/pane-map/"$session_id".json
+
+printf 'cw: %s → %s (%s, session %s)\n' "$window_name" "$pane_target" "$tool" "$session_id"
