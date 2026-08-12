@@ -14,7 +14,7 @@ adapted for Linux/WSL.
 ## Quick start (on the WSL box or a test VM)
 
 ```bash
-git clone <this-remote> ~/dotfiles-wsl
+git clone https://github.com/apeoverflow/dotfiles-wsl.git ~/dotfiles-wsl
 cd ~/dotfiles-wsl
 ./setup.sh        # apt deps, eza/lazygit, oh-my-zsh + plugins, tmux plugins
 ./install.sh      # symlink home/* into $HOME (backs up any originals)
