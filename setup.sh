@@ -6,11 +6,28 @@ set -uo pipefail
 clone() { [ -d "$2" ] || git clone --depth=1 "$1" "$2"; }
 
 echo "== apt packages =="
-sudo apt update
-sudo apt install -y \
-  zsh tmux git curl wget unzip build-essential jq uuid-runtime lsof \
-  ripgrep fd-find bat fzf silversearcher-ag btop \
-  wslu || echo "!! some apt packages failed — check output"
+sudo apt-get update -y || echo "!! apt update failed"
+# Install per-package so one unavailable package can't abort the whole batch
+# (learned the hard way: a missing 'wslu' on a non-WSL VM took everything down).
+CORE=(zsh tmux git curl wget unzip build-essential ca-certificates gnupg \
+      jq uuid-runtime lsof ripgrep fd-find bat fzf silversearcher-ag btop)
+for p in "${CORE[@]}"; do
+  sudo apt-get install -y "$p" >/dev/null 2>&1 && echo "  ✓ $p" || echo "  ✗ $p (apt install failed)"
+done
+
+echo "== Node.js (needed for the copilot CLI) =="
+if ! command -v node >/dev/null 2>&1; then
+  curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - >/dev/null 2>&1 || true
+  sudo apt-get install -y nodejs >/dev/null 2>&1 && echo "  ✓ node $(node -v 2>/dev/null)" \
+    || echo "  ✗ node — install via nvm:  nvm install --lts"
+fi
+
+echo "== wslu (WSL-only: provides wslview) =="
+if grep -qiE "microsoft|wsl" /proc/version 2>/dev/null; then
+  sudo apt-get install -y wslu >/dev/null 2>&1 && echo "  ✓ wslu" || echo "  ✗ wslu (add-apt-repository universe?)"
+else
+  echo "  • skipped — not running under WSL (wslview only matters on real WSL)"
+fi
 
 echo "== eza (modern ls) =="
 if ! command -v eza >/dev/null 2>&1; then
@@ -30,12 +47,21 @@ mkdir -p ~/.local/bin
 
 echo "== lazygit (latest release binary) =="
 if ! command -v lazygit >/dev/null 2>&1; then
+  case "$(uname -m)" in
+    x86_64|amd64) lgarch="Linux_x86_64" ;;
+    aarch64|arm64) lgarch="Linux_arm64" ;;
+    *) lgarch="Linux_x86_64" ;;
+  esac
   ver=$(curl -s https://api.github.com/repos/jesseduffield/lazygit/releases/latest \
         | grep -oE '"tag_name": *"v[0-9.]+"' | grep -oE '[0-9.]+')
   if [ -n "${ver:-}" ]; then
     curl -Lo /tmp/lazygit.tgz \
-      "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${ver}_Linux_x86_64.tar.gz"
-    tar xf /tmp/lazygit.tgz -C /tmp lazygit && sudo install /tmp/lazygit /usr/local/bin && rm -f /tmp/lazygit*
+      "https://github.com/jesseduffield/lazygit/releases/latest/download/lazygit_${ver}_${lgarch}.tar.gz" \
+      && tar xf /tmp/lazygit.tgz -C /tmp lazygit \
+      && sudo install /tmp/lazygit /usr/local/bin && rm -f /tmp/lazygit* \
+      && echo "  ✓ lazygit $ver ($lgarch)" || echo "  ✗ lazygit download failed"
+  else
+    echo "  ✗ could not resolve lazygit version (GitHub API rate limit?)"
   fi
 fi
 

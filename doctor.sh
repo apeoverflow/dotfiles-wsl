@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ~/dotfiles-wsl/doctor.sh — verify the WSL environment has what the dotfiles need.
 # Safe, read-only. Run on the VM/work machine after setup.sh + install.sh.
+# Check the same PATH the shell will use (bat/fd get symlinked here by setup.sh).
+export PATH="$HOME/.local/bin:$PATH"
 ok=0; miss=0; warn=0
 chk()  { if command -v "$1" >/dev/null 2>&1; then printf '  \033[32m✓\033[0m %-16s %s\n' "$1" "$(command -v "$1")"; ok=$((ok+1));
          else printf '  \033[31m✗\033[0m %-16s MISSING%s\n' "$1" "${2:+  — $2}"; miss=$((miss+1)); fi; }
