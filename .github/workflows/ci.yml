@@ -49,3 +49,22 @@ jobs:
 
       - name: doctor.sh (informational — AI CLIs / optional tools absent in CI)
         run: ./doctor.sh || true
+
+  # Actually run setup.sh on a clean Ubuntu box and assert the core tools land.
+  # (Guards against the atomic-apt-failure class of bug where one bad package
+  # silently takes the whole install down.)
+  setup-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run setup.sh
+        run: ./setup.sh
+      - name: Assert core tools installed
+        run: |
+          set -e
+          export PATH="$HOME/.local/bin:$PATH"
+          missing=0
+          for t in zsh tmux fzf rg bat fd btop eza node; do
+            if command -v "$t" >/dev/null 2>&1; then echo "✓ $t"; else echo "✗ $t MISSING"; missing=1; fi
+          done
+          [ "$missing" -eq 0 ] || { echo "core tools missing after setup.sh"; exit 1; }
