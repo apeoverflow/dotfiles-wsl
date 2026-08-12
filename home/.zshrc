@@ -1,4 +1,4 @@
-export ZSH="/Users/kieranwilliams/.oh-my-zsh"
+export ZSH="$HOME/.oh-my-zsh"
 
 
 # For subprocess / non-TTY shells (nvim plugin terminals, :terminal -c wrappers,
@@ -171,14 +171,14 @@ export PATH="$HOME/.yarn/bin:$HOME/.config/yarn/global/node_modules/.bin:$PATH"
 
 # >>> conda initialize >>> (COMMENTED OUT - uncomment if needed)
 # !! Contents within this block are managed by 'conda init' !!
-# __conda_setup="$('/Users/kieranwilliams/opt/anaconda3/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
+# __conda_setup="$('$HOME/opt/anaconda3/bin/conda' 'shell.zsh' 'hook' 2> /dev/null)"
 # if [ $? -eq 0 ]; then
 #     eval "$__conda_setup"
 # else
-#     if [ -f "/Users/kieranwilliams/opt/anaconda3/etc/profile.d/conda.sh" ]; then
-#         . "/Users/kieranwilliams/opt/anaconda3/etc/profile.d/conda.sh"
+#     if [ -f "$HOME/opt/anaconda3/etc/profile.d/conda.sh" ]; then
+#         . "$HOME/opt/anaconda3/etc/profile.d/conda.sh"
 #     else
-#         export PATH="/Users/kieranwilliams/opt/anaconda3/bin:$PATH"
+#         export PATH="$HOME/opt/anaconda3/bin:$PATH"
 #     fi
 # fi
 # unset __conda_setup
@@ -189,7 +189,7 @@ export PATH="$HOME/.yarn/bin:$HOME/.config/yarn/global/node_modules/.bin:$PATH"
 
 
 # bun completions
-[ -s "/Users/kieranwilliams/.bun/_bun" ] && source "/Users/kieranwilliams/.bun/_bun"
+[ -s "$HOME/.bun/_bun" ] && source "$HOME/.bun/_bun"
 
 # bun
 export BUN_INSTALL="$HOME/.bun"
@@ -206,7 +206,7 @@ nvm() {
 export PATH="$HOME/.local/bin:$PATH"
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-export NARGO_HOME="/Users/kieranwilliams/.nargo"
+export NARGO_HOME="$HOME/.nargo"
 
 export PATH="$PATH:$NARGO_HOME/bin"
 export PATH="${HOME}/.bb:${PATH}"
