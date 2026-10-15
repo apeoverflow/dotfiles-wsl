@@ -1,5 +1,15 @@
 export ZSH="$HOME/.oh-my-zsh"
 
+# Force UTF-8 locale so glyphs render correctly under tmux over SSH
+# (Termius mobile does not forward LANG; without this, tmux collapses
+# Nerd Font glyphs to `__`). Ubuntu doesn't ship en_GB.UTF-8 generated
+# (setup.sh runs locale-gen) — fall back to C.UTF-8 so we never set a
+# missing locale and spam "setlocale" warnings.
+if locale -a 2>/dev/null | grep -qiE '^en_GB\.utf-?8$'; then
+  export LANG="en_GB.UTF-8" LC_ALL="en_GB.UTF-8"
+else
+  export LANG="C.UTF-8" LC_ALL="C.UTF-8"
+fi
 
 # For subprocess / non-TTY shells (nvim plugin terminals, :terminal -c wrappers,
 # CI, pipes), skip p10k entirely — gitstatus can't init without a controlling TTY
@@ -33,6 +43,13 @@ setopt HIST_SAVE_NO_DUPS
 setopt HIST_REDUCE_BLANKS
 setopt SHARE_HISTORY
 setopt APPEND_HISTORY
+
+# Grok CLI (installer drops binary + zsh completions here). Added before
+# compinit so its completions load without a second compinit pass.
+if [[ -d "$HOME/.grok" ]]; then
+  export PATH="$HOME/.grok/bin:$PATH"
+  fpath=("$HOME/.grok/completions/zsh" $fpath)
+fi
 
 # Basic auto/tab complete:
 autoload -U compinit
@@ -108,6 +125,7 @@ alias o="wslview"           # WSL: open in the default Windows app (wslu)
 alias o.="wslview ."
 alias v="nvim"
 alias vd="nvim-dev"
+alias mdpreview='mdroll --no-remote-images --mermaid text'
 alias p="python3"
 alias ts="ts-node"
 alias cwd="pwd | clip.exe"  # WSL: copy cwd to the Windows clipboard
@@ -286,15 +304,18 @@ cwr() {
 
 # cw — tab-complete existing worktree names from the current repo
 _cw() {
-  local repo_root wt_dir names
+  local repo_root names
   repo_root=$(git rev-parse --show-toplevel 2>/dev/null) || return
-  wt_dir="${repo_root}/.claude/worktrees"
-  if [[ -d "$wt_dir" ]]; then
-    names=($(ls "$wt_dir" 2>/dev/null))
-  fi
+  # Glob, not `ls a b` — ls prints "dir:" headers once both dirs exist.
+  names=("${repo_root}"/{.agents,.claude}/worktrees/*(N/:t))
   _arguments \
-    '1:worktree:(($names))' \
-    '-c[use GitHub Copilot CLI]' \
+    '1:name:(($names))' \
+    '-cp[use GitHub Copilot CLI]' \
+    '-c[use GitHub Copilot CLI (alias of -cp)]' \
+    '-co[use Codex CLI]' \
+    '-gr[use Grok CLI]' \
+    '-pi[use Pi coding agent]' \
+    '-w[create/reuse a git worktree]' \
     '-d[dangerously-skip-permissions]' \
     '-s[use Sonnet model]' \
     '-sd[Sonnet + dangerously-skip-permissions]' \

@@ -9,6 +9,8 @@
 # exact resume command into each restored pane:
 #     claude  --resume  <session_id>
 #     copilot --resume=<session_id>
+#     grok    --resume  <session_id>
+#     codex   resume    <session_id>
 set -uo pipefail
 
 IN="${AI_PERSIST_DIR:-$HOME/.tmux/ai-persist}/ai-live.json"
@@ -43,6 +45,8 @@ for (( i = 0; i < count; i++ )); do
   case "$tool" in
     claude)  cmd="claude --resume $sid" ;;
     copilot) cmd="copilot --resume=$sid" ;;
+    grok)    cmd="grok --resume $sid" ;;
+    codex)   cmd="codex resume $sid" ;;
     *) continue ;;
   esac
 

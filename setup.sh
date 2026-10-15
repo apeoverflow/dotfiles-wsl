@@ -10,12 +10,21 @@ sudo apt-get update -y || echo "!! apt update failed"
 # Install per-package so one unavailable package can't abort the whole batch
 # (learned the hard way: a missing 'wslu' on a non-WSL VM took everything down).
 CORE=(zsh tmux git curl wget unzip build-essential ca-certificates gnupg \
-      jq uuid-runtime lsof ripgrep fd-find bat fzf silversearcher-ag btop)
+      jq uuid-runtime lsof ripgrep fd-find bat fzf silversearcher-ag btop \
+      locales ncurses-term)
 for p in "${CORE[@]}"; do
   sudo apt-get install -y "$p" >/dev/null 2>&1 && echo "  ✓ $p" || echo "  ✗ $p (apt install failed)"
 done
 
-echo "== Node.js (needed for the copilot CLI) =="
+echo "== locale (en_GB.UTF-8 — .zshrc falls back to C.UTF-8 without it) =="
+if locale -a 2>/dev/null | grep -qiE '^en_GB\.utf-?8$'; then
+  echo "  ✓ en_GB.UTF-8 already generated"
+else
+  sudo locale-gen en_GB.UTF-8 >/dev/null 2>&1 && echo "  ✓ en_GB.UTF-8 generated" \
+    || echo "  ✗ locale-gen en_GB.UTF-8 failed"
+fi
+
+echo "== Node.js (needed for the copilot / codex CLIs) =="
 if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - >/dev/null 2>&1 || true
   sudo apt-get install -y nodejs >/dev/null 2>&1 && echo "  ✓ node $(node -v 2>/dev/null)" \
@@ -135,7 +144,8 @@ cat <<'EOF'
 ── Next steps ───────────────────────────────────────────────
   1) ~/dotfiles-wsl/install.sh          # symlink the dotfiles into $HOME
   2) open tmux, press  Ctrl-Space  I    # install tmux plugins (tpm)
-  3) AI CLIs:  install Claude Code;  npm i -g @github/copilot   (needs node)
+  3) AI CLIs:  install Claude Code;  npm i -g @github/copilot @openai/codex
+               (needs node);  grok / pi via their own installers (optional)
   4) ~/dotfiles-wsl/doctor.sh           # verify everything
 ─────────────────────────────────────────────────────────────
 EOF

@@ -20,11 +20,11 @@ to install and what to put under git to reproduce it on a fresh machine.
 │                                                                            │
 │  └─ tmux (prefix = Ctrl-Space)                                             │
 │      ├─ custom keybinds → claude-* scripts (window picker, jump, commit,PR)│
-│      ├─ per-window: claude | copilot | nvim | lazygit | shell | dev-server │
+│      ├─ per-window: claude | copilot | grok | codex | nvim | lazygit | shell │
 │      └─ persistence: resurrect + continuum + ai-persist hooks              │
 │                                                                            │
 │  Orchestration layer (the "claude-bot" system)                            │
-│      cw  ─ creates git worktree + tmux window + launches claude/copilot     │
+│      cw  ─ tmux window + optional worktree; claude/copilot/codex/grok       │
 │      pane-map/  ─ per-session JSON (session_id ↔ window ↔ worktree)         │
 │      hooks  ─ on-stop / on-notification → mac notify + window ✓/! + log     │
 │      pickers ─ claude-windows / claude-jump / claude-pick / claude-dash     │
@@ -131,24 +131,27 @@ Load order and notable pieces:
 - **Session root:** `session-created` hook captures `SESSION_ROOT`; `prefix+R`
   overrides it. Shell/editor/git binds open at session root vs pane dir.
 - **Claude orchestration binds:**
-  `prefix+j` claude-jump · `prefix+n` claude-pick · `prefix+w` claude-windows
-  (rich picker) · `prefix+c` new claude · `prefix+b` claude-commit · `prefix+p`
-  claude-pr · `prefix+W` choose-tree · `after-select-window` → claude-clear-tick
+  `prefix+j` claude-jump · `prefix+w` claude-windows (rich picker) · `prefix+c`
+  new agent (`cw`) · `prefix+b` claude-commit · `prefix+n`/`prefix+p` next/previous
+  window (repeatable) · `prefix+W` choose-tree · `after-select-window` → claude-clear-tick
   (strips the ✓/! tick).
 - **Persistence block** (added later): plugins + `@continuum-save-interval` +
   the `ai-persist` hooks. Full detail in `tmux-persistence.md`.
 
-### 3.3 The Claude/Copilot orchestration layer
+### 3.3 The agent orchestration layer
 
 The heart of the setup — turns "start an agent on a task" into "one command that
-makes a worktree, a tmux window, and a tracked session."
+opens a tmux window and a tracked session."
 
 **`cw <name> [flags]`** (`~/.local/bin/cw`) — the launcher:
-1. Parses flags → tool (`claude` default / `-c` copilot), model (`-s` sonnet),
-   permission mode (`-d`/`-sd` bypass, `-n` normal), `-nw` no-worktree, `--agent`.
+1. Parses flags → tool (`claude` default / `-cp` copilot / `-co` codex / `-gr` grok / `-pi` Pi),
+   model (`-s` sonnet, ignored for codex/grok/pi), permission mode (`-d`/`-sd` bypass,
+   `-n` normal), `-w` worktree, `--agent`.
 2. Ensures a git repo + at least one commit.
-3. Creates a worktree at `<repo>/.claude/worktrees/<name>` (reuses branch if it
-   exists, else branches from current). Existing worktree → reuse, name gets `+`.
+3. Default: run in the current directory. `-w` creates/reuses a worktree at
+   `<repo>/.agents/worktrees/<name>` (reuses branch if it exists, else branches
+   from current). Existing worktree → reuse, name gets `+`. Older
+   `.claude/worktrees/<name>` checkouts are still reused if present.
 4. Generates a `session_id` (`uuidgen`) and launches the tool in a **new tmux
    window** via a temp bootstrap script (sets the OSC-2 title to `tool:session_id`).
 5. Writes `~/.claude/pane-map/<session_id>.json`:
@@ -160,14 +163,18 @@ id to its tmux window, worktree, cwd, and tool. Read by the hooks and pickers.
 (Note: `pane_target` here drifts under `renumber-windows`; the reboot layer no
 longer trusts it — see `tmux-persistence.md`.)
 
-**Hooks** (registered in `~/.claude/settings.json`):
-- `on-stop.sh` (Stop) — on turn end: skip if <15s; extract a title from the
-  transcript; **mac notify** (`terminal-notifier`); rename the window `✓ <wt>`;
+**Hooks** (registered in `~/.claude/settings.json`; Grok loads these too):
+- `on-stop.sh` (Stop, timeout 8s) — on turn end: skip if <15s or Grok session-end;
+  **notify** — macOS: `osascript` (not `terminal-notifier`, which never exits and
+  pinned "Running stop hook" for up to 600s); WSL: `notify-send` → PowerShell
+  toast, detached via `setsid` for the same reason; rename the window `✓ <wt>`;
   append a `stop` event to `~/.claude/ready.log`.
-- `on-notification.sh` (Notification) — when Claude needs input: notify; rename
-  window `! <wt>`; log a `notification` event.
-- `lib.sh` — shared helpers: `parse_stdin`, `lookup_pane`, `extract_title`,
-  `append_ready_log`, `notify_mac`, `flash_window`.
+- `on-notification.sh` (Notification, timeout 5s) — when the agent needs input:
+  notify; rename window `! <wt>`; log a `notification` event.
+- `on-session-start.sh` (SessionStart, timeout 3s) — writes a timestamp so a
+  hung start-plugin spinner can be timed later.
+- `lib.sh` — shared helpers plus `~/.claude/hooks/debug.jsonl` step log.
+- `diagnose.sh` — dump hook timeouts, leftover notifiers, debug log, Grok wait times.
 
 **Navigation / lifecycle scripts** (`~/.local/bin/`):
 
@@ -175,10 +182,10 @@ longer trusts it — see `tmux-persistence.md`.)
 |---|---|---|
 | `claude-windows` | `prefix+w` / `prefix+c` | fzf picker of tmux windows w/ live preview; create / kill (+ worktree cleanup) / reorder |
 | `claude-jump` | `prefix+j` | jump to the most recently finished session (reads `ready.log`) |
-| `claude-pick` / `cws` | `prefix+n` | fzf picker of recent stop events |
+| `claude-pick` / `cws` | — (run `claude-pick` / `cws`) | fzf picker of recent stop events |
 | `claude-clear-tick` | `after-select-window` | strip the `✓ `/`! ` tick when you visit a window |
 | `claude-commit` | `prefix+b` | stage + commit all changes in the pane's worktree |
-| `claude-pr` | `prefix+p` | push the worktree branch and open a PR (`gh`) |
+| `claude-pr` | — (run `claude-pr`) | push the worktree branch and open a PR (`gh`) |
 | `claude-sync` | — | pull `test/` branch commits back into the working branch |
 | `claude-gc` | — | prune old `pane-map` files, trim `ready.log` |
 | `claude-dashboard` | — | gather git/worktree context, pipe to `claude -p` for a summary |
@@ -333,8 +340,8 @@ cd ~/dotfiles && git init && git add -A && git commit -m "initial dotfiles"
 
 | If you want… | You need |
 |---|---|
-| `cw` to launch agents | `git`, `tmux`, `jq`, `uuidgen`, `claude` and/or `copilot` (node) |
-| Claude window ✓/! + notifications | `terminal-notifier`, hooks in `settings.json`, `tmux` |
+| `cw` to launch agents | `git`, `tmux`, `jq`, `uuidgen`, plus `claude` / `copilot` / `codex` / `grok` |
+| Claude window ✓/! + notifications | hooks in `settings.json`, `tmux`, `jq`; WSL: `notify-send` or `powershell.exe` |
 | `prefix+w` / `ta` pickers | `fzf` |
 | `claude-pr` | `gh` (authenticated) |
 | `claude-dash` TUI | `uv` (runs the PEP-723 script) |

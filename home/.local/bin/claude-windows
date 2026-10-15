@@ -79,8 +79,14 @@ kill_window() {
   fi
 
   if [[ -n "$repo_root" ]]; then
-    local wt_dir="${repo_root}/.claude/worktrees/${wt_name}"
-    if [[ -d "$wt_dir" ]]; then
+    local wt_dir=""
+    for candidate in \
+      "${repo_root}/.agents/worktrees/${wt_name}" \
+      "${repo_root}/.claude/worktrees/${wt_name}"
+    do
+      [[ -d "$candidate" ]] && { wt_dir="$candidate"; break; }
+    done
+    if [[ -n "$wt_dir" ]]; then
       git -C "$repo_root" worktree remove "$wt_dir" --force 2>&1 || \
         rm -rf "$wt_dir" 2>/dev/null
       git -C "$repo_root" worktree prune 2>/dev/null || true
@@ -128,11 +134,15 @@ move_to_position() {
 create_session() {
   local repo_root suggestions=""
   repo_root=$(git -C "$pane_dir" worktree list --porcelain 2>/dev/null | head -1 | sed 's/^worktree //') || true
-  if [[ -n "$repo_root" && -d "${repo_root}/.claude/worktrees" ]]; then
-    suggestions=$(ls "${repo_root}/.claude/worktrees" 2>/dev/null | tr '\n' ' ')
+  if [[ -n "$repo_root" ]]; then
+    # Glob, not `ls a b` — ls prints "dir:" headers once both dirs exist.
+    local d
+    for d in "${repo_root}"/.agents/worktrees/*/ "${repo_root}"/.claude/worktrees/*/; do
+      [[ -d "$d" ]] && suggestions+="$(basename "$d") "
+    done
   fi
 
-  local flags=("-d:dangerously-skip-permissions" "-s:Sonnet model" "-sd:Sonnet+dangerous" "-n:normal mode" "-nw:no worktree" "-c:GitHub Copilot")
+  local flags=("-cp:GitHub Copilot" "-co:Codex" "-gr:Grok" "-pi:Pi" "-w:git worktree" "-d:skip permissions" "-s:Sonnet model" "-sd:Sonnet+dangerous" "-n:normal mode")
   local flag_hint=""
   for f in "${flags[@]}"; do
     flag_hint="${flag_hint}  ${f%%:*}  ${f#*:}\n"
@@ -144,7 +154,7 @@ create_session() {
   fi
 
   local header
-  header=$(printf 'Enter: cw <name> [flags]\n\n⚠ Base branch: %s\n\nFlags:\n%b\nExisting worktrees: %s\n\nType name and flags, e.g.: feat-auth -d' "${current_branch:-unknown}" "$flag_hint" "${suggestions:-none}")
+  header=$(printf 'Enter: cw <name> [flags]\n\n⚠ Base branch: %s\nDefault: Claude in this directory (no worktree)\n\nFlags:\n%b\nExisting worktrees: %s\n\nType name and flags, e.g.: feat-auth -pi -w' "${current_branch:-unknown}" "$flag_hint" "${suggestions:-none}")
 
   local items=" \n"
   for s in $suggestions; do

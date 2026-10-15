@@ -2,7 +2,7 @@
 
 WSL2 (Ubuntu/Debian) port of my macOS terminal setup
 ([`dotfiles-mac`](https://github.com/apeoverflow/dotfiles-mac)) — zsh +
-powerlevel10k + tmux + the Claude/Copilot worktree orchestration + reboot
+powerlevel10k + tmux + the agent orchestration (Claude / Copilot / Codex / Grok / Pi) + reboot
 persistence. Same structure and symlink workflow; the platform-specific bits are
 adapted for Linux/WSL.
 
@@ -24,7 +24,9 @@ chsh -s $(which zsh)   # then restart WSL:  wsl --shutdown  (from Windows)
 ```
 
 AI CLIs (install separately): **Claude Code** (official installer →
-`~/.local/bin/claude`) and **Copilot** (`npm i -g @github/copilot`, needs Node).
+`~/.local/bin/claude`), **Copilot** / **Codex** (`npm i -g @github/copilot
+@openai/codex`, needs Node), and optionally **Grok** / **Pi** via their own
+installers. `cw` picks them with `-cp` / `-co` / `-gr` / `-pi`.
 Neovim config is its own repo: `git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim`.
 
 ---
@@ -51,16 +53,20 @@ cd ~/dotfiles-wsl && git add -A && git commit -m "…" && git push
 | `ls` | `exa` | `eza` |
 | `bat` / `fd` | native | Debian `batcat` / `fdfind` → symlinked to `bat`/`fd` |
 | `du/df/top/ps` | dust/duf/btop/procs (always aliased) | aliased **only if installed** (so a missing tool never shadows the real command) |
-| notifications | `terminal-notifier` | `notify-send` → PowerShell toast fallback |
+| notifications | `osascript` (capped at 2s) | `notify-send` → PowerShell toast, launched detached (`setsid`) so the hook never waits on it |
+| hook time cap (`run_limited`) | perl fork + alarm | GNU `timeout`, perl fallback |
+| locale | `en_GB.UTF-8` | `en_GB.UTF-8` if generated (`setup.sh` runs `locale-gen`), else `C.UTF-8` |
+| `default-terminal` | `tmux-256color` | `tmux-256color` if its terminfo exists (`ncurses-term`), else `screen-256color` |
 | `date` parsing (hooks) | BSD `date -j` | GNU `date -d` first, BSD fallback |
 | `stat` mtime | `stat -f %m` | `stat -c %Y` first, BSD fallback |
 | `lsof` (ai-persist) | `/usr/sbin/lsof` | `lsof` on `$PATH` |
 | JAVA_HOME | `/usr/libexec/java_home` | JDK path if present, else unset |
-| removed | iTerm2 integration, MATLAB, `/opt/homebrew`, gcloud-in-Downloads, fvm | — |
+| removed | iTerm2 integration, MATLAB, `/opt/homebrew`, gcloud-in-Downloads, fvm, Dart pub-cache, Unity CLI, `settings.json` `autoMode` (project-specific) | — |
 
 The **portable core is unchanged**: `cw`, all `claude-*` scripts, the pane-map,
-the Stop/Notification hooks, tmux keybindings, and the resurrect + ai-persist
-reboot layer. Package management is `apt` + a couple of release binaries (see
+the Stop/Notification/SessionStart hooks (with their watchdog + `debug.jsonl`
+log; `~/.claude/hooks/diagnose.sh` dumps it), tmux keybindings, and the
+resurrect + ai-persist reboot layer. Package management is `apt` + a couple of release binaries (see
 `setup.sh`).
 
 **Optional `Brewfile`** — a reduced version of the macOS Brewfile for use with
@@ -81,7 +87,8 @@ apt is enough.
 - **Clipboard**: OSC-52 is forwarded, so tmux copy-mode yanks reach the Windows
   clipboard. `clip.exe` handles the shell-side copies.
 - **Notifications**: use WSLg's `notify-send` if available, otherwise a Windows
-  toast via `powershell.exe`.
+  toast via `powershell.exe`. Either way the notifier is detached, so a slow
+  `powershell.exe` start never holds up the Stop hook.
 
 ---
 

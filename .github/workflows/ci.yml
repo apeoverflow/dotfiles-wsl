@@ -47,6 +47,32 @@ jobs:
       - name: install.sh is idempotent (second run is a no-op)
         run: ./install.sh
 
+      # The Stop hook must never pin the agent ("Running stop hook" for minutes).
+      # A fake notify-send that hangs for 60s stands in for a stuck notifier:
+      # the hook has to detach it and return well inside its 8s settings timeout.
+      - name: hooks return fast even with a hung notifier
+        run: |
+          set -e
+          mkdir -p /tmp/fakebin
+          printf '#!/bin/sh\nsleep 60\n' > /tmp/fakebin/notify-send && chmod +x /tmp/fakebin/notify-send
+          export PATH="/tmp/fakebin:$PATH"
+          run() {  # <hook> <json>
+            start=$(date +%s)
+            rc=0; printf '%s' "$2" | timeout 8 "$HOME/.claude/hooks/$1" || rc=$?
+            took=$(( $(date +%s) - start ))
+            echo "$1 exited $rc in ${took}s"
+            [ "$rc" -eq 0 ] || { echo "::error::$1 exited $rc"; exit 1; }
+            [ "$took" -le 3 ] || { echo "::error::$1 took ${took}s"; exit 1; }
+          }
+          run on-stop.sh '{"session_id":"ci-stop","hook_event_name":"Stop","cwd":"/tmp"}'
+          run on-stop.sh '{"sessionId":"ci-grok","hookEventName":"Stop","reason":"session_end"}'
+          run on-notification.sh '{"session_id":"ci-notif","hook_event_name":"Notification","message":"it'"'"'s waiting"}'
+          run on-session-start.sh '{"session_id":"ci-start","hook_event_name":"SessionStart"}'
+          jq -c '{step,session_id}' "$HOME/.claude/hooks/debug.jsonl"
+          jq -e 'select(.session_id=="ci-grok" and .step=="skip")' "$HOME/.claude/hooks/debug.jsonl" >/dev/null
+          jq -e 'select(.session_id=="ci-stop" and .step=="done")' "$HOME/.claude/hooks/debug.jsonl" >/dev/null
+          echo "✓ hooks fast + debug.jsonl populated"
+
       - name: doctor.sh (informational — AI CLIs / optional tools absent in CI)
         run: ./doctor.sh || true
 
@@ -77,7 +103,7 @@ jobs:
           ./install.sh >/dev/null          # symlink .zshrc etc. into $HOME
           # load the real interactive .zshrc and fail on any load-time error
           err=$(zsh -ic 'true' 2>&1 >/dev/null || true)
-          if printf '%s' "$err" | grep -qiE "command not found|no such file or directory"; then
+          if printf '%s' "$err" | grep -qiE "command not found|no such file or directory|setlocale"; then
             echo "::error::.zshrc emitted load errors:"; printf '%s\n' "$err"; exit 1
           fi
           echo "✓ .zshrc loads without errors"

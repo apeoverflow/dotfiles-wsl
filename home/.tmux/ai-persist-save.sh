@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ~/.tmux/ai-persist-save.sh
-# Snapshot the claude/copilot sessions that are live *right now* so they can be
+# Snapshot the claude/copilot/grok/codex sessions that are live *right now* so they can be
 # re-attached after a reboot. Fired by tmux-resurrect's post-save hook
 # (@resurrect-hook-post-save-all), so it runs on every save — including
 # tmux-continuum's periodic auto-save.
@@ -19,6 +19,7 @@ OUT_DIR="${AI_PERSIST_DIR:-$HOME/.tmux/ai-persist}"
 OUT="$OUT_DIR/ai-live.json"
 COPILOT_STATE="${AI_PERSIST_COPILOT_STATE:-$HOME/.copilot/session-state}"
 CLAUDE_PROJECTS="${AI_PERSIST_CLAUDE_PROJECTS:-$HOME/.claude/projects}"
+GROK_SESSIONS="${AI_PERSIST_GROK_SESSIONS:-$HOME/.grok/sessions}"
 mkdir -p "$OUT_DIR"
 
 command -v jq >/dev/null 2>&1 || exit 0
@@ -73,6 +74,17 @@ claude_sid_for_pid() {
   [[ -n "$f" ]] && basename "$f" .jsonl
 }
 
+# grok: sid from a pid holding .../sessions/<cwd>/<sid>/updates.jsonl
+grok_sid_for_pid() {
+  local pid="$1" f
+  f=$(lsof -p "$pid" -Fn 2>/dev/null \
+        | sed -n 's/^n//p' \
+        | grep -F "$GROK_SESSIONS/" \
+        | grep -E '/updates\.jsonl$' \
+        | head -1)
+  [[ -n "$f" ]] && basename "$(dirname "$f")"
+}
+
 entries=()
 while IFS=$'\t' read -r target pane_pid path; do
   [[ -n "$pane_pid" ]] || continue
@@ -90,12 +102,31 @@ while IFS=$'\t' read -r target pane_pid path; do
     fi
   done
 
+  # then grok (lsof of ~/.grok/sessions)
+  if [[ -z "$tool" ]]; then
+    for p in $pids; do
+      s=$(grok_sid_for_pid "$p") || true
+      if [[ -n "${s:-}" ]]; then tool="grok"; sid="$s"; break; fi
+    done
+  fi
+
   # then claude (lsof, only if not already matched)
   if [[ -z "$tool" ]]; then
     for p in $pids; do
       s=$(claude_sid_for_pid "$p") || true
       if [[ -n "${s:-}" ]]; then tool="claude"; sid="$s"; break; fi
     done
+  fi
+
+  # last resort: OSC-2 title set by cw (`tool:session_id`)
+  if [[ -z "$tool" ]]; then
+    pane_title=$(tmux display-message -t "$target" -p '#{pane_title}' 2>/dev/null) || true
+    case "$pane_title" in
+      claude:*|copilot:*|grok:*|codex:*)
+        tool="${pane_title%%:*}"
+        sid="${pane_title#*:}"
+        ;;
+    esac
   fi
 
   [[ -n "$tool" && -n "$sid" ]] || continue

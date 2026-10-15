@@ -4,12 +4,24 @@
   },
   "model": "opus",
   "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/on-session-start.sh",
+            "timeout": 3
+          }
+        ]
+      }
+    ],
     "Stop": [
       {
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/on-stop.sh"
+            "command": "~/.claude/hooks/on-stop.sh",
+            "timeout": 8
           }
         ]
       }
@@ -19,7 +31,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "~/.claude/hooks/on-notification.sh"
+            "command": "~/.claude/hooks/on-notification.sh",
+            "timeout": 5
           }
         ]
       }
@@ -44,6 +57,7 @@
   },
   "skipDangerousModePermissionPrompt": true,
   "theme": "dark",
+  "switchModelsOnFlag": true,
   "agentPushNotifEnabled": true,
   "skipAutoPermissionPrompt": true,
   "voiceEnabled": true
