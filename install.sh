@@ -68,6 +68,21 @@ register_copilot_hooks() {
 }
 register_copilot_hooks
 
+# WezTerm is a Windows app, so its config goes in the Windows profile, not WSL
+# $HOME. Copied, not symlinked — Windows can't follow a WSL symlink.
+install_wezterm_config() {
+  local src="$DOTFILES/windows/.wezterm.lua" winhome
+  command -v cmd.exe >/dev/null 2>&1 || { echo "wezterm: skipped (not WSL)"; return 0; }
+  winhome="$(cmd.exe /c 'echo %USERPROFILE%' 2>/dev/null | tr -d '\r')"
+  [[ -n "$winhome" ]] && winhome="$(wslpath "$winhome")" || { echo "wezterm: skipped (no %USERPROFILE%)"; return 0; }
+  if cmp -s "$src" "$winhome/.wezterm.lua"; then echo "wezterm: config up to date"; return 0; fi
+  if [[ -e "$winhome/.wezterm.lua" ]]; then
+    mkdir -p "$BACKUP"; cp "$winhome/.wezterm.lua" "$BACKUP/.wezterm.lua"; backed=$((backed+1))
+  fi
+  cp "$src" "$winhome/.wezterm.lua" && echo "wezterm: config → $winhome/.wezterm.lua"
+}
+install_wezterm_config
+
 echo "linked/repointed: $linked"
 [[ "$pruned" -gt 0 ]] && echo "removed $pruned stale symlink(s)"
 [[ "$backed" -gt 0 ]] && echo "backed up $backed original(s) to: $BACKUP"

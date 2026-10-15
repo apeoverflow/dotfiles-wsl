@@ -81,7 +81,29 @@ apt is enough.
 
 ---
 
-## Terminal (Windows Terminal)
+## Terminal (WezTerm)
+
+[`windows/.wezterm.lua`](windows/.wezterm.lua) is set up to match the iTerm2 profile:
+same font, colours, Option-as-Meta and ⌘-style line editing. It opens straight into WSL.
+WezTerm runs on Windows, so `install.sh` **copies** it to `%USERPROFILE%\.wezterm.lua`.
+Re-run `install.sh` after editing; WezTerm reloads it on its own.
+
+- Install **MesloLGS NF** on Windows (the four `.ttf`s from the powerlevel10k README).
+- ⌘ becomes **Ctrl+Shift** (change `CMD` at the top of the file to use something else):
+
+| iTerm | WezTerm |
+|---|---|
+| ⌘T / ⌘W / ⌘N | Ctrl+Shift+T / W / N |
+| ⌘⇧[ / ⌘⇧], ⌘1…9 | Ctrl+Shift+{ / }, **Alt**+1…9 |
+| ⌘D / ⌘⇧D split | Ctrl+Shift+D / **E** |
+| ⌘[ / ⌘], ⌘⌥arrows | Ctrl+Shift+[ / ], Ctrl+Shift+Alt+arrows |
+| ⌘⇧↩ zoom pane, ⌘↩ fullscreen | Ctrl+Shift+Enter, Alt+Enter |
+| ⌘C / ⌘V / ⌘F / ⌘K | Ctrl+Shift+C / V / F / K |
+| ⌘← / ⌘→ / ⌘⌫ | Ctrl+Shift+← / → / ⌫ (line start / end / kill) |
+| ⌥← / ⌥→ / ⌥⌫ | Alt+← / → / ⌫ (word jump / delete) |
+| ⌘-click link | Ctrl+click |
+
+## Terminal (Windows Terminal, if used instead)
 
 - **Tab title = tmux session name** already works: `~/.tmux.conf` has
   `set -g set-titles on` / `set-titles-string "#S"`, and Windows Terminal honours
