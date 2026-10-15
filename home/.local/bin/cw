@@ -1,15 +1,10 @@
 #!/usr/bin/env bash
-# ~/.local/bin/cw — Launcher for Claude Code, Copilot CLI, Codex CLI, Grok, and Pi.
+# ~/.local/bin/cw — Launcher for GitHub Copilot CLI (the only agent on WSL).
 # Creates a tmux window (optionally a git worktree), registers it in pane-map.
+# The session id is passed to copilot (--session-id) so its agentStop /
+# notification hooks can find this window via ~/.claude/pane-map/<id>.json.
 #
-# Usage: cw <name> [-cp|-co|-gr|-pi] [-w] [-d|-s|-sd|-n] [--agent <agent>] [-- <extra-args...>]
-#
-# Tool:
-#   (default)   claude  Claude Code
-#   -cp         copilot GitHub Copilot CLI   (-c is an alias)
-#   -co         codex   Codex CLI
-#   -gr         grok    Grok CLI
-#   -pi         pi      Pi coding agent
+# Usage: cw <name> [-w] [-d|-s|-sd|-n] [--agent <agent>] [-- <extra-args...>]
 #
 # Worktree:
 #   (default)   run in the current directory
@@ -17,24 +12,25 @@
 #   -nw         no-op (kept so old invocations don't error)
 #
 # Mode:
-#   (default)   auto permission mode  (copilot: --allow-all-tools, codex: workspace-write)
-#   -d          dangerously skip all permission prompts
-#   -s          Sonnet model + normal mode — ignored for codex/grok/pi
-#   -sd         Sonnet model + dangerous — model ignored for codex/grok/pi
+#   (default)   Opus   + --allow-all-tools
+#   -d          Opus   + --allow-all (tools, paths and URLs)
+#   -s          Sonnet + normal mode (prompts enabled)
+#   -sd         Sonnet + --allow-all
 #   -n          normal mode (prompts enabled)
+#   -c / -cp    no-op (copilot is already the only tool; kept for muscle memory)
 set -euo pipefail
 
-export PATH="$HOME/.local/bin:$HOME/.grok/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
 
 usage() {
-  printf 'usage: cw <name> [-cp|-co|-gr|-pi] [-w] [-d|-s|-sd|-n] [--agent <agent>] [-- <extra-args...>]\n' >&2
+  printf 'usage: cw <name> [-w] [-d|-s|-sd|-n] [--agent <agent>] [-- <extra-args...>]\n' >&2
   exit 1
 }
 
 [[ $# -eq 0 ]] && usage
 name="$1"; shift
 
-tool="claude"
+tool="copilot"
 agent=""
 model=""
 permission_mode="auto"
@@ -42,10 +38,7 @@ use_worktree=false
 extra_args=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -cp|-c)    tool="copilot"; shift ;;
-    -co)       tool="codex"; shift ;;
-    -gr)       tool="grok"; shift ;;
-    -pi)       tool="pi"; shift ;;
+    -cp|-c)    shift ;;
     -d)        permission_mode="bypass"; shift ;;
     -s)        model="sonnet"; permission_mode=""; shift ;;
     -sd)       model="sonnet"; permission_mode="bypass"; shift ;;
@@ -59,16 +52,10 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# Resolve model name per tool (codex/grok/pi use their own configured default)
-if [[ "$tool" == "copilot" ]]; then
-  [[ "$model" == "sonnet" ]] && model="claude-sonnet-4.6" || model="claude-opus-4.6"
-elif [[ "$tool" == "codex" || "$tool" == "grok" || "$tool" == "pi" ]]; then
-  model=""
-else
-  [[ "$model" == "sonnet" ]] && model="claude-sonnet-4-6" || model="claude-opus-4-7"
-fi
+# Copilot model ids — availability is per account/plan (check with /model in copilot)
+[[ "$model" == "sonnet" ]] && model="claude-sonnet-5.5" || model="claude-opus-5.5"
 
-printf 'cw: launching %s (%s)\n' "$tool" "${model:-default model}"
+printf 'cw: launching %s (%s)\n' "$tool" "$model"
 
 # Pre-flight checks
 [[ -n "${TMUX:-}" ]] || {
@@ -78,7 +65,7 @@ command -v "$tool" >/dev/null 2>&1 || {
   printf 'cw: %s not found on $PATH\n' "$tool" >&2; exit 1
 }
 command -v jq >/dev/null 2>&1 || {
-  printf 'cw: jq not found — brew install jq\n' >&2; exit 1
+  printf 'cw: jq not found — sudo apt install jq\n' >&2; exit 1
 }
 if ! git rev-parse --git-dir >/dev/null 2>&1; then
   printf 'cw: not a git repo — initialising\n'
@@ -126,47 +113,14 @@ else
   launch_dir="$worktree_dir"
 fi
 
-# Build tool-specific args
-tool_args=()
-if [[ "$tool" == "claude" ]]; then
-  tool_args+=("--session-id" "$session_id" "--name" "$window_name" "--model" "$model")
-  if [[ "$permission_mode" == "bypass" ]]; then
-    tool_args+=("--dangerously-skip-permissions")
-  elif [[ -n "$permission_mode" ]]; then
-    tool_args+=("--permission-mode" "$permission_mode")
-  fi
-  [[ -n "$agent" ]] && tool_args+=("--agent" "$agent")
-elif [[ "$tool" == "codex" ]]; then
-  [[ -n "$model" ]] && tool_args+=("--model" "$model")
-  if [[ "$permission_mode" == "bypass" ]]; then
-    tool_args+=("--dangerously-bypass-approvals-and-sandbox")
-  elif [[ -n "$permission_mode" ]]; then
-    tool_args+=("--sandbox" "workspace-write" "--ask-for-approval" "on-request")
-  fi
-  [[ -n "$agent" ]] && tool_args+=("--profile" "$agent")
-elif [[ "$tool" == "grok" ]]; then
-  tool_args+=("--session-id" "$session_id")
-  if [[ "$permission_mode" == "bypass" ]]; then
-    tool_args+=("--always-approve")
-  elif [[ -n "$permission_mode" ]]; then
-    tool_args+=("--permission-mode" "auto")
-  fi
-  [[ -n "$agent" ]] && tool_args+=("--agent" "$agent")
-elif [[ "$tool" == "pi" ]]; then
-  # --name is the long form: Pi's -n is this same flag, and cw's -n is "normal mode".
-  tool_args+=("--session-id" "$session_id" "--name" "$window_name")
-  [[ -n "$model" ]] && tool_args+=("--model" "$model")
-  if [[ "$permission_mode" == "bypass" ]]; then
-    tool_args+=("--approve")
-  fi
-else
-  # copilot
-  tool_args+=("--model" "$model")
-  if [[ "$permission_mode" != "" ]]; then
-    tool_args+=("--allow-all-tools")
-  fi
-  [[ -n "$agent" ]] && tool_args+=("--agent" "$agent")
+# Build copilot args
+tool_args=("--session-id" "$session_id" "--name" "$window_name" "--model" "$model")
+if [[ "$permission_mode" == "bypass" ]]; then
+  tool_args+=("--allow-all")
+elif [[ -n "$permission_mode" ]]; then
+  tool_args+=("--allow-all-tools")
 fi
+[[ -n "$agent" ]] && tool_args+=("--agent" "$agent")
 
 [[ ${#extra_args[@]} -gt 0 ]] && tool_args+=("${extra_args[@]}")
 

@@ -24,7 +24,7 @@ else
     || echo "  ✗ locale-gen en_GB.UTF-8 failed"
 fi
 
-echo "== Node.js (needed for the copilot / codex CLIs) =="
+echo "== Node.js (needed for the copilot CLI) =="
 if ! command -v node >/dev/null 2>&1; then
   curl -fsSL https://deb.nodesource.com/setup_lts.x | sudo -E bash - >/dev/null 2>&1 || true
   sudo apt-get install -y nodejs >/dev/null 2>&1 && echo "  ✓ node $(node -v 2>/dev/null)" \
@@ -144,8 +144,8 @@ cat <<'EOF'
 ── Next steps ───────────────────────────────────────────────
   1) ~/dotfiles-wsl/install.sh          # symlink the dotfiles into $HOME
   2) open tmux, press  Ctrl-Space  I    # install tmux plugins (tpm)
-  3) AI CLIs:  install Claude Code;  npm i -g @github/copilot @openai/codex
-               (needs node);  grok / pi via their own installers (optional)
+  3) Copilot:  npm i -g @github/copilot && copilot login
+               (then re-run install.sh if it ran before copilot existed)
   4) ~/dotfiles-wsl/doctor.sh           # verify everything
 ─────────────────────────────────────────────────────────────
 EOF

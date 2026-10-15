@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# ~/dotfiles/install.sh — symlink every tracked file in home/ into $HOME.
+# ~/dotfiles-wsl/install.sh — symlink every tracked file in home/ into $HOME,
+# then register the Copilot CLI hooks.
 # Idempotent: safe to re-run. Existing real files are backed up first; existing
 # symlinks are just repointed. After this runs, editing e.g. ~/.zshrc edits the
 # repo copy directly — no copying, just `git commit`.
@@ -31,6 +32,43 @@ while IFS= read -r f; do
   linked=$((linked+1))
 done < <(find "$SRC" -type f)
 
+# Drop symlinks left behind by files since removed from home/ (e.g. the old
+# ~/.claude/settings.json, claude-dash). Only touches links into this repo.
+pruned=0
+while IFS= read -r l; do
+  dest="$(readlink "$l")"
+  if [[ "$dest" == "$SRC"/* && ! -e "$dest" ]]; then rm -f "$l"; pruned=$((pruned+1)); fi
+done < <(find "$HOME" -maxdepth 1 -type l; find "$HOME/.claude" "$HOME/.local/bin" "$HOME/.tmux" "$HOME/.config" -maxdepth 3 -type l 2>/dev/null)
+
+# Register the hooks with GitHub Copilot CLI (the only agent on WSL). Merged
+# into ~/.copilot/settings.json rather than symlinked — Copilot writes its own
+# state there. Replaces only our entries (bash path under ~/.claude/hooks/), so
+# re-runs are no-ops and any other hooks you've added are kept.
+register_copilot_hooks() {
+  local dir="${COPILOT_HOME:-$HOME/.copilot}" hooks="$HOME/.claude/hooks"
+  local cfg="$dir/settings.json" tmp
+  command -v jq >/dev/null 2>&1 || { echo "copilot hooks: skipped (jq missing)"; return 0; }
+  mkdir -p "$dir"
+  [[ -s "$cfg" ]] || echo '{}' > "$cfg"
+  tmp="$(mktemp)"
+  if jq --arg h "$hooks" '
+      def ours($ev; $script; $t):
+        .hooks[$ev] = ([(.hooks[$ev] // [])[] | select((.bash // .command // "") | startswith($h + "/") | not)]
+                       + [{type: "command", bash: ($h + "/" + $script), timeoutSec: $t}]);
+      .hooks = (.hooks // {})
+      | ours("agentStop";    "on-stop.sh";          8)
+      | ours("notification"; "on-notification.sh";  5)
+      | ours("sessionStart"; "on-session-start.sh"; 3)
+    ' "$cfg" > "$tmp"; then
+    if cmp -s "$tmp" "$cfg"; then rm -f "$tmp"; echo "copilot hooks: already registered"
+    else cat "$tmp" > "$cfg"; rm -f "$tmp"; echo "copilot hooks: registered in $cfg"; fi
+  else
+    rm -f "$tmp"; echo "copilot hooks: $cfg isn't plain JSON — left untouched; add hooks by hand" >&2
+  fi
+}
+register_copilot_hooks
+
 echo "linked/repointed: $linked"
+[[ "$pruned" -gt 0 ]] && echo "removed $pruned stale symlink(s)"
 [[ "$backed" -gt 0 ]] && echo "backed up $backed original(s) to: $BACKUP"
 echo "done."

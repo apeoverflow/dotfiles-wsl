@@ -33,7 +33,7 @@ Bootstrap complete. Start using it now:
   tmux              # then press  Ctrl-Space  then  I   to install tmux plugins
   nvim              # first launch syncs LazyVim plugins (~30s)
 
-Optional — to test the cw orchestration with Claude:
-  npm install -g @anthropic-ai/claude-code && claude   # authenticate once
+Copilot CLI (the agent cw launches):
+  npm install -g @github/copilot && copilot login     # authenticate once
 ──────────────────────────────────────────────────────────────
 EOF

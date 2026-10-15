@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ~/.tmux/ai-persist-save.sh
-# Snapshot the claude/copilot/grok/codex sessions that are live *right now* so they can be
+# Snapshot the copilot sessions that are live *right now* so they can be
 # re-attached after a reboot. Fired by tmux-resurrect's post-save hook
 # (@resurrect-hook-post-save-all), so it runs on every save — including
 # tmux-continuum's periodic auto-save.
@@ -10,16 +10,12 @@
 # ~/.claude/pane-map cache (which goes stale). Specifically:
 #   * copilot writes ~/.copilot/session-state/<sid>/inuse.<pid>.lock while a
 #     session is open  ->  pid in the pane's process group  =>  authoritative sid
-#   * claude keeps ~/.claude/projects/<enc-cwd>/<sid>.jsonl open  ->  lsof of a
-#     pid in the pane's process group yields the sid
 # Result frozen into ai-live.json as {pane_target, tool, session_id, cwd}.
 set -uo pipefail
 
 OUT_DIR="${AI_PERSIST_DIR:-$HOME/.tmux/ai-persist}"
 OUT="$OUT_DIR/ai-live.json"
 COPILOT_STATE="${AI_PERSIST_COPILOT_STATE:-$HOME/.copilot/session-state}"
-CLAUDE_PROJECTS="${AI_PERSIST_CLAUDE_PROJECTS:-$HOME/.claude/projects}"
-GROK_SESSIONS="${AI_PERSIST_GROK_SESSIONS:-$HOME/.grok/sessions}"
 mkdir -p "$OUT_DIR"
 
 command -v jq >/dev/null 2>&1 || exit 0
@@ -63,28 +59,6 @@ group_pids() {
   /bin/ps -o pid= -g "$pgid" 2>/dev/null | tr -d ' '
 }
 
-# claude: sid from a pid holding <sid>.jsonl open under the projects dir.
-claude_sid_for_pid() {
-  local pid="$1" f
-  f=$(lsof -p "$pid" -Fn 2>/dev/null \
-        | sed -n 's/^n//p' \
-        | grep -F "$CLAUDE_PROJECTS/" \
-        | grep -E '\.jsonl$' \
-        | head -1)
-  [[ -n "$f" ]] && basename "$f" .jsonl
-}
-
-# grok: sid from a pid holding .../sessions/<cwd>/<sid>/updates.jsonl
-grok_sid_for_pid() {
-  local pid="$1" f
-  f=$(lsof -p "$pid" -Fn 2>/dev/null \
-        | sed -n 's/^n//p' \
-        | grep -F "$GROK_SESSIONS/" \
-        | grep -E '/updates\.jsonl$' \
-        | head -1)
-  [[ -n "$f" ]] && basename "$(dirname "$f")"
-}
-
 entries=()
 while IFS=$'\t' read -r target pane_pid path; do
   [[ -n "$pane_pid" ]] || continue
@@ -92,7 +66,7 @@ while IFS=$'\t' read -r target pane_pid path; do
   # gather the pane's process group once
   pids=$(group_pids "$pane_pid")
 
-  # copilot first (cheap lookup), resolving empty forks to their resumable parent
+  # copilot via its inuse.<pid>.lock, resolving empty forks to their resumable parent
   for p in $pids; do
     s=$(copilot_sid_for_pid "$p") || true
     if [[ -n "${s:-}" ]]; then
@@ -102,31 +76,14 @@ while IFS=$'\t' read -r target pane_pid path; do
     fi
   done
 
-  # then grok (lsof of ~/.grok/sessions)
-  if [[ -z "$tool" ]]; then
-    for p in $pids; do
-      s=$(grok_sid_for_pid "$p") || true
-      if [[ -n "${s:-}" ]]; then tool="grok"; sid="$s"; break; fi
-    done
-  fi
-
-  # then claude (lsof, only if not already matched)
-  if [[ -z "$tool" ]]; then
-    for p in $pids; do
-      s=$(claude_sid_for_pid "$p") || true
-      if [[ -n "${s:-}" ]]; then tool="claude"; sid="$s"; break; fi
-    done
-  fi
-
-  # last resort: OSC-2 title set by cw (`tool:session_id`)
+  # fallback: OSC-2 title set by cw (`copilot:<session_id>`) — e.g. if the
+  # inuse lock isn't visible; still only kept if the session is resumable.
   if [[ -z "$tool" ]]; then
     pane_title=$(tmux display-message -t "$target" -p '#{pane_title}' 2>/dev/null) || true
-    case "$pane_title" in
-      claude:*|copilot:*|grok:*|codex:*)
-        tool="${pane_title%%:*}"
-        sid="${pane_title#*:}"
-        ;;
-    esac
+    if [[ "$pane_title" == copilot:* ]]; then
+      s=$(copilot_resumable_sid "${pane_title#copilot:}" "$path") || s=""
+      [[ -n "$s" ]] && { tool="copilot"; sid="$s"; }
+    fi
   fi
 
   [[ -n "$tool" && -n "$sid" ]] || continue

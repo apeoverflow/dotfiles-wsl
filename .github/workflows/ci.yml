@@ -24,7 +24,7 @@ jobs:
       - name: Syntax-check bash scripts (bash -n)
         run: |
           set -e
-          # pick every bash-shebanged file (skips the uv/python claude-dash and .zshrc)
+          # pick every bash-shebanged file (skips .zshrc)
           mapfile -t files < <(grep -rIl -E '^#!.*(bash|/bin/sh)' setup.sh doctor.sh install.sh home)
           for f in "${files[@]}"; do echo "bash -n $f"; bash -n "$f"; done
 
@@ -47,6 +47,20 @@ jobs:
       - name: install.sh is idempotent (second run is a no-op)
         run: ./install.sh
 
+      - name: Copilot hooks registered once, other hooks kept
+        run: |
+          set -e
+          cfg="$HOME/.copilot/settings.json"
+          jq '.hooks.agentStop += [{"type":"command","bash":"/usr/bin/true"}]' "$cfg" > /tmp/s && cp /tmp/s "$cfg"
+          ./install.sh >/dev/null && ./install.sh >/dev/null
+          jq '.hooks' "$cfg"
+          jq -e --arg h "$HOME/.claude/hooks/" '
+            ([.hooks.agentStop[] | select(.bash | startswith($h))] | length) == 1 and
+            ([.hooks.notification[] | select(.bash | startswith($h))] | length) == 1 and
+            ([.hooks.sessionStart[] | select(.bash | startswith($h))] | length) == 1 and
+            ([.hooks.agentStop[] | select(.bash == "/usr/bin/true")] | length) == 1' "$cfg" >/dev/null
+          echo "✓ one entry per event, foreign hook preserved"
+
       # The Stop hook must never pin the agent ("Running stop hook" for minutes).
       # A fake notify-send that hangs for 60s stands in for a stuck notifier:
       # the hook has to detach it and return well inside its 8s settings timeout.
@@ -64,12 +78,16 @@ jobs:
             [ "$rc" -eq 0 ] || { echo "::error::$1 exited $rc"; exit 1; }
             [ "$took" -le 3 ] || { echo "::error::$1 took ${took}s"; exit 1; }
           }
-          run on-stop.sh '{"session_id":"ci-stop","hook_event_name":"Stop","cwd":"/tmp"}'
-          run on-stop.sh '{"sessionId":"ci-grok","hookEventName":"Stop","reason":"session_end"}'
-          run on-notification.sh '{"session_id":"ci-notif","hook_event_name":"Notification","message":"it'"'"'s waiting"}'
-          run on-session-start.sh '{"session_id":"ci-start","hook_event_name":"SessionStart"}'
+          # Payload shapes captured from Copilot CLI 1.0.97 (agentStop has no event name).
+          run on-stop.sh '{"sessionId":"ci-stop","timestamp":1,"cwd":"/tmp","transcriptPath":"","stopReason":"end_turn"}'
+          run on-stop.sh '{"sessionId":"ci-abort","timestamp":1,"cwd":"/tmp","transcriptPath":"","stopReason":"aborted"}'
+          run on-notification.sh '{"sessionId":"ci-notif","hook_event_name":"Notification","message":"it'"'"'s waiting","notification_type":"permission_prompt"}'
+          run on-session-start.sh '{"sessionId":"ci-start","timestamp":1,"cwd":"/tmp","source":"new"}'
+          # claude-commit / claude-pr's `copilot -p` runs set CW_HEADLESS=1 → hooks stay silent
+          printf '%s' '{"sessionId":"ci-headless","stopReason":"end_turn"}' | CW_HEADLESS=1 "$HOME/.claude/hooks/on-stop.sh"
+          ! grep -q ci-headless "$HOME/.claude/hooks/debug.jsonl"
           jq -c '{step,session_id}' "$HOME/.claude/hooks/debug.jsonl"
-          jq -e 'select(.session_id=="ci-grok" and .step=="skip")' "$HOME/.claude/hooks/debug.jsonl" >/dev/null
+          jq -e 'select(.session_id=="ci-abort" and .step=="skip")' "$HOME/.claude/hooks/debug.jsonl" >/dev/null
           jq -e 'select(.session_id=="ci-stop" and .step=="done")' "$HOME/.claude/hooks/debug.jsonl" >/dev/null
           echo "✓ hooks fast + debug.jsonl populated"
 

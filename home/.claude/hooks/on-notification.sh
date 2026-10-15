@@ -14,8 +14,7 @@ main() {
   parse_stdin || return 0
   lookup_pane "$HOOK_SESSION_ID"
 
-  local notif_title="Claude — ${HOOK_WORKTREE} !"
-  [[ "$HOOK_AGENT" == "grok" ]] && notif_title="Grok — ${HOOK_WORKTREE} !"
+  local notif_title="Copilot — ${HOOK_WORKTREE} !"
   local msg="${HOOK_MESSAGE:-needs your input}"
   local label="! ${HOOK_WORKTREE}"
 

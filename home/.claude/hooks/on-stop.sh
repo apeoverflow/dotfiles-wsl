@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# ~/.claude/hooks/on-stop.sh — fires when a Claude/Grok turn finishes.
+# ~/.claude/hooks/on-stop.sh — Copilot agentStop: fires when a turn finishes.
 # Always exits 0 — hook failures must not interrupt the agent.
 set -uo pipefail
 
@@ -14,7 +14,7 @@ main() {
   parse_stdin || return 0
   log_debug parsed "agent=${HOOK_AGENT} reason=${HOOK_REASON}"
 
-  # Grok also fires Stop at session end; notifying then is noise and can stall teardown.
+  # Only a normal turn end gets a ✓ (not aborts / errors / session teardown).
   if [[ -n "${HOOK_REASON:-}" && "${HOOK_REASON}" != "end_turn" ]]; then
     log_debug skip "reason=${HOOK_REASON}"
     return 0
@@ -23,35 +23,29 @@ main() {
   lookup_pane "$HOOK_SESSION_ID"
   log_debug lookup "pane=${HOOK_PANE_TARGET:-} wt=${HOOK_WORKTREE:-}"
 
-  # Grok's session log is not Claude jsonl; scanning it can block jq until the
-  # 5s watchdog fires (live waits were exactly ~5049ms). Use the payload title.
-  if [[ "$HOOK_AGENT" != "grok" ]]; then
-    local last_user_ts
-    last_user_ts=$(tail -c 65536 "${HOOK_TRANSCRIPT_PATH:-/dev/null}" 2>/dev/null \
-      | tail -n +2 \
-      | jq -r 'select(.type == "user") | .timestamp // empty' 2>/dev/null \
-      | tail -1) || true
-    if [[ -n "$last_user_ts" ]]; then
-      local clean_ts="${last_user_ts%%.*}"
-      clean_ts="${clean_ts%Z}"
-      local user_epoch now_ts
-      # GNU date (Linux/WSL) first, BSD date (macOS) as fallback — portable.
-      user_epoch=$(date -u -d "$clean_ts" +%s 2>/dev/null \
-        || date -j -u -f "%Y-%m-%dT%H:%M:%S" "$clean_ts" +%s 2>/dev/null) || user_epoch=0
-      now_ts=$(date +%s)
-      if (( now_ts - user_epoch < 15 )); then
-        log_debug skip "turn_under_15s"
-        return 0
-      fi
+  local transcript last_user_ts
+  transcript=$(copilot_transcript)
+  last_user_ts=$(last_user_message "$transcript" | jq -r '.ts // empty' 2>/dev/null) || true
+  # Skip notification if the turn completed in under 15 seconds
+  if [[ -n "$last_user_ts" ]]; then
+    local clean_ts="${last_user_ts%%.*}"
+    clean_ts="${clean_ts%Z}"
+    local user_epoch now_ts
+    # GNU date (Linux/WSL) first, BSD date (macOS) as fallback — portable.
+    user_epoch=$(date -u -d "$clean_ts" +%s 2>/dev/null \
+      || date -j -u -f "%Y-%m-%dT%H:%M:%S" "$clean_ts" +%s 2>/dev/null) || user_epoch=0
+    now_ts=$(date +%s)
+    if (( now_ts - user_epoch < 15 )); then
+      log_debug skip "turn_under_15s"
+      return 0
     fi
-    extract_title "${HOOK_TRANSCRIPT_PATH:-}"
   fi
+  extract_title "$transcript"
   [[ -z "${HOOK_TITLE:-}" || "$HOOK_TITLE" == "null" ]] && HOOK_TITLE="(untitled)"
   log_debug title "${HOOK_TITLE:0:80}"
 
   local label="✓ ${HOOK_WORKTREE}"
-  local notif_title="Claude — ${HOOK_WORKTREE}"
-  [[ "$HOOK_AGENT" == "grok" ]] && notif_title="Grok — ${HOOK_WORKTREE}"
+  local notif_title="Copilot — ${HOOK_WORKTREE}"
 
   log_debug notify "$notif_title"
   notify_mac "$notif_title" "$HOOK_TITLE"

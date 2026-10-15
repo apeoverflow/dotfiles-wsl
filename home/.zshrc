@@ -44,13 +44,6 @@ setopt HIST_REDUCE_BLANKS
 setopt SHARE_HISTORY
 setopt APPEND_HISTORY
 
-# Grok CLI (installer drops binary + zsh completions here). Added before
-# compinit so its completions load without a second compinit pass.
-if [[ -d "$HOME/.grok" ]]; then
-  export PATH="$HOME/.grok/bin:$PATH"
-  fpath=("$HOME/.grok/completions/zsh" $fpath)
-fi
-
 # Basic auto/tab complete:
 autoload -U compinit
 zstyle ':completion:*' menu select
@@ -310,15 +303,10 @@ _cw() {
   names=("${repo_root}"/{.agents,.claude}/worktrees/*(N/:t))
   _arguments \
     '1:name:(($names))' \
-    '-cp[use GitHub Copilot CLI]' \
-    '-c[use GitHub Copilot CLI (alias of -cp)]' \
-    '-co[use Codex CLI]' \
-    '-gr[use Grok CLI]' \
-    '-pi[use Pi coding agent]' \
     '-w[create/reuse a git worktree]' \
-    '-d[dangerously-skip-permissions]' \
-    '-s[use Sonnet model]' \
-    '-sd[Sonnet + dangerously-skip-permissions]' \
+    '-d[allow all tools, paths and URLs]' \
+    '-s[use Sonnet model, prompts enabled]' \
+    '-sd[Sonnet + allow all]' \
     '-n[normal mode, prompts enabled]'
 }
 compdef _cw cw

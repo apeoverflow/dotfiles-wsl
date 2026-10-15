@@ -3,6 +3,20 @@
 # Called by: bind p display-popup -E -h 50% -w 70% "~/.local/bin/claude-pr"
 set -euo pipefail
 
+# Headless one-shot text from Copilot (the only agent on WSL). The input goes in
+# the prompt itself, capped at 100KB (Linux limits one argv string to 128KB);
+# no tools, no AGENTS.md. CW_HEADLESS tells our agentStop/notification hooks
+# (which Copilot runs with its env) to stay quiet for this background call.
+copilot_text() {
+  local input
+  input=$(head -c 100000)
+  CW_HEADLESS=1 copilot -p "$1
+
+--- input ---
+$input" -s --no-custom-instructions --available-tools --model claude-sonnet-5.5 2>/dev/null
+}
+
+
 pane_dir=$(tmux display-message -p '#{pane_current_path}')
 cd "$pane_dir"
 
@@ -38,11 +52,10 @@ if [[ "$has_changes" == true ]]; then
       git add -A
       diff=$(git --no-pager diff --cached --stat && echo "---" && git --no-pager diff --cached -- . ':(exclude)*.lock' ':(exclude)package-lock.json' | head -300)
       echo "Generating commit message (this may take a few seconds)..."
-      msg=$(printf '%s' "$diff" | claude -p \
+      msg=$(printf '%s' "$diff" | copilot_text \
         "Write a git commit message for these changes on branch '${branch}'.
 Use conventional commit format. First line under 72 chars. Add a blank line then 1-3 bullet points if needed.
-Output ONLY the commit message, nothing else." \
-        --model claude-sonnet-4-6 2>/dev/null) || msg=""
+Output ONLY the commit message, nothing else.") || msg=""
       [[ -z "$msg" ]] && msg="wip: ${branch} — remaining changes"
       echo "Committing..."
       git commit -m "$msg" || { echo "Commit failed"; sleep 2; exit 1; }
@@ -167,7 +180,7 @@ echo "Generating PR description..."
 pr_diff=$(git --no-pager diff "$base_branch"..."$branch" --stat && echo "---" && git --no-pager diff "$base_branch"..."$branch" -- . ':(exclude)*.lock' ':(exclude)package-lock.json' | head -500)
 pr_commits=$(git --no-pager log --oneline "$base_branch".."$branch" | head -20)
 
-pr_desc=$(printf '%s\n\n--- Commits ---\n%s' "$pr_diff" "$pr_commits" | claude -p \
+pr_desc=$(printf '%s\n\n--- Commits ---\n%s' "$pr_diff" "$pr_commits" | copilot_text \
   "Write a GitHub PR description for these changes on branch '${branch}' merging into '${base_branch}'.
 Format:
 ## Summary
@@ -176,8 +189,7 @@ Format:
 ## Changes
 - List the key changes grouped logically.
 
-Output ONLY the PR description in markdown, nothing else." \
-  --model claude-sonnet-4-6 2>/dev/null) || pr_desc=""
+Output ONLY the PR description in markdown, nothing else.") || pr_desc=""
 
 if [[ -n "$pr_desc" ]]; then
   echo ""

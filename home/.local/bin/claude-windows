@@ -142,7 +142,7 @@ create_session() {
     done
   fi
 
-  local flags=("-cp:GitHub Copilot" "-co:Codex" "-gr:Grok" "-pi:Pi" "-w:git worktree" "-d:skip permissions" "-s:Sonnet model" "-sd:Sonnet+dangerous" "-n:normal mode")
+  local flags=("-w:git worktree" "-d:allow all (tools/paths/urls)" "-s:Sonnet + prompts" "-sd:Sonnet + allow all" "-n:normal mode (prompts)")
   local flag_hint=""
   for f in "${flags[@]}"; do
     flag_hint="${flag_hint}  ${f%%:*}  ${f#*:}\n"
@@ -154,7 +154,7 @@ create_session() {
   fi
 
   local header
-  header=$(printf 'Enter: cw <name> [flags]\n\n⚠ Base branch: %s\nDefault: Claude in this directory (no worktree)\n\nFlags:\n%b\nExisting worktrees: %s\n\nType name and flags, e.g.: feat-auth -pi -w' "${current_branch:-unknown}" "$flag_hint" "${suggestions:-none}")
+  header=$(printf 'Enter: cw <name> [flags]\n\n⚠ Base branch: %s\nDefault: Copilot (Opus) in this directory, no worktree\n\nFlags:\n%b\nExisting worktrees: %s\n\nType name and flags, e.g.: feat-auth -w' "${current_branch:-unknown}" "$flag_hint" "${suggestions:-none}")
 
   local items=" \n"
   for s in $suggestions; do

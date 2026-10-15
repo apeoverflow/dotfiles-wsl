@@ -1,16 +1,13 @@
 #!/usr/bin/env bash
 # ~/.tmux/ai-persist-restore.sh
-# Re-attach claude/copilot sessions after tmux-resurrect has rebuilt the window
+# Re-attach copilot sessions after tmux-resurrect has rebuilt the window
 # geometry. Fired by @resurrect-hook-post-restore-all, so it runs after every
 # restore (manual prefix+Ctrl-r or continuum auto-restore).
 #
 # tmux-resurrect brings each AI window back as a plain shell sitting in the
 # correct worktree directory. We read the frozen ai-live.json and type the
 # exact resume command into each restored pane:
-#     claude  --resume  <session_id>
 #     copilot --resume=<session_id>
-#     grok    --resume  <session_id>
-#     codex   resume    <session_id>
 set -uo pipefail
 
 IN="${AI_PERSIST_DIR:-$HOME/.tmux/ai-persist}/ai-live.json"
@@ -43,10 +40,7 @@ for (( i = 0; i < count; i++ )); do
   [[ -n "$cwd" && "$cwd" != "$curpath" ]] && continue
 
   case "$tool" in
-    claude)  cmd="claude --resume $sid" ;;
     copilot) cmd="copilot --resume=$sid" ;;
-    grok)    cmd="grok --resume $sid" ;;
-    codex)   cmd="codex resume $sid" ;;
     *) continue ;;
   esac
 

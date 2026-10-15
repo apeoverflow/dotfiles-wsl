@@ -29,9 +29,13 @@ else
 fi
 echo "── notifications ────────────────"
 if command -v notify-send >/dev/null 2>&1 || command -v powershell.exe >/dev/null 2>&1; then echo "  ✓ a notifier is available"; ok=$((ok+1)); else printf '  \033[33m•\033[0m no notifier yet (notify-send / powershell.exe) — WSLg or a daemon provides it\n'; warn=$((warn+1)); fi
-# AI CLIs are installed by their own installers, not setup.sh — flag, don't fail.
+# Copilot is installed via npm, not setup.sh — flag, don't fail.
 echo "── editor ───────────────────────";      chk nvim "setup.sh installs it"; dir ~/.config/nvim/init.lua
-echo "── AI CLIs (install separately) ──";      for t in claude copilot codex grok pi; do warnc "$t"; done
+echo "── Copilot CLI ──────────────────";      warnc copilot "npm i -g @github/copilot && copilot login"
+_cs="${COPILOT_HOME:-$HOME/.copilot}/settings.json"
+if jq -e --arg h "$HOME/.claude/hooks/on-stop.sh" '[.hooks.agentStop[]?.bash] | index($h)' "$_cs" >/dev/null 2>&1; then
+  printf '  \033[32m✓\033[0m %-16s registered in %s\n' "hooks" "${_cs/#$HOME/~}"; ok=$((ok+1))
+else printf '  \033[31m✗\033[0m %-16s not registered in %s (run install.sh)\n' "hooks" "${_cs/#$HOME/~}"; miss=$((miss+1)); fi
 echo "── optional ─────────────────────";      for t in dust duf procs bob; do warnc "$t"; done
 echo "── zsh / tmux plugins ───────────"
 dir ~/.oh-my-zsh

@@ -143,17 +143,23 @@ Load order and notable pieces:
 The heart of the setup — turns "start an agent on a task" into "one command that
 opens a tmux window and a tracked session."
 
+> **WSL repo:** the only agent is GitHub Copilot CLI. `cw` always launches
+> `copilot`; the hooks are Copilot hooks (registered in `~/.copilot/settings.json`
+> by `install.sh`); `claude-dash` / `claude-dashboard` are not shipped.
+
 **`cw <name> [flags]`** (`~/.local/bin/cw`) — the launcher:
-1. Parses flags → tool (`claude` default / `-cp` copilot / `-co` codex / `-gr` grok / `-pi` Pi),
-   model (`-s` sonnet, ignored for codex/grok/pi), permission mode (`-d`/`-sd` bypass,
-   `-n` normal), `-w` worktree, `--agent`.
+1. Parses flags → model (`claude-opus-5.5` default, `-s` `claude-sonnet-5.5`),
+   permissions (default `--allow-all-tools`, `-d`/`-sd` `--allow-all`, `-n`/`-s`
+   prompts on), `-w` worktree, `--agent`. `-c`/`-cp` are accepted no-ops.
 2. Ensures a git repo + at least one commit.
 3. Default: run in the current directory. `-w` creates/reuses a worktree at
    `<repo>/.agents/worktrees/<name>` (reuses branch if it exists, else branches
    from current). Existing worktree → reuse, name gets `+`. Older
    `.claude/worktrees/<name>` checkouts are still reused if present.
-4. Generates a `session_id` (`uuidgen`) and launches the tool in a **new tmux
-   window** via a temp bootstrap script (sets the OSC-2 title to `tool:session_id`).
+4. Generates a `session_id` (`uuidgen`) and launches `copilot --session-id <id>
+   --name <window>` in a **new tmux window** via a temp bootstrap script (sets the
+   OSC-2 title to `copilot:session_id`). Passing the id is what lets the hooks find
+   the window — Copilot's hook payload carries the same `sessionId`.
 5. Writes `~/.claude/pane-map/<session_id>.json`:
    `{session_id, pane_target, worktree, cwd, tool, base_branch}` — resolving the
    real base branch through any `test/` prefix.
@@ -163,18 +169,22 @@ id to its tmux window, worktree, cwd, and tool. Read by the hooks and pickers.
 (Note: `pane_target` here drifts under `renumber-windows`; the reboot layer no
 longer trusts it — see `tmux-persistence.md`.)
 
-**Hooks** (registered in `~/.claude/settings.json`; Grok loads these too):
-- `on-stop.sh` (Stop, timeout 8s) — on turn end: skip if <15s or Grok session-end;
-  **notify** — macOS: `osascript` (not `terminal-notifier`, which never exits and
-  pinned "Running stop hook" for up to 600s); WSL: `notify-send` → PowerShell
-  toast, detached via `setsid` for the same reason; rename the window `✓ <wt>`;
-  append a `stop` event to `~/.claude/ready.log`.
-- `on-notification.sh` (Notification, timeout 5s) — when the agent needs input:
-  notify; rename window `! <wt>`; log a `notification` event.
-- `on-session-start.sh` (SessionStart, timeout 3s) — writes a timestamp so a
-  hung start-plugin spinner can be timed later.
-- `lib.sh` — shared helpers plus `~/.claude/hooks/debug.jsonl` step log.
-- `diagnose.sh` — dump hook timeouts, leftover notifiers, debug log, Grok wait times.
+**Hooks** (Copilot user-level hooks, merged into `~/.copilot/settings.json` by
+`install.sh`; scripts live in `~/.claude/hooks/`):
+- `on-stop.sh` (`agentStop`, timeoutSec 8) — on turn end (`stopReason ==
+  end_turn`): skip if the turn took <15s (last `user.message` in
+  `~/.copilot/session-state/<sid>/events.jsonl`); title = that prompt;
+  **notify** via `notify-send` → PowerShell toast, detached via `setsid` so a slow
+  notifier can't hold the hook (the macOS repo hit 10-minute stalls from a
+  notifier that never exited); rename the window `✓ <wt>`; append a `stop` event
+  to `~/.claude/ready.log`.
+- `on-notification.sh` (`notification`, timeoutSec 5) — when Copilot needs input
+  (e.g. a permission prompt): notify; rename window `! <wt>`; log a
+  `notification` event.
+- `on-session-start.sh` (`sessionStart`, timeoutSec 3) — logs the start (`source`).
+- `lib.sh` — shared helpers, 5s watchdog, `~/.claude/hooks/debug.jsonl` step log.
+- `diagnose.sh` — dump registered Copilot hooks, leftover notifiers, debug log,
+  hook lines from the newest `~/.copilot/logs/*.log`.
 
 **Navigation / lifecycle scripts** (`~/.local/bin/`):
 
@@ -188,8 +198,6 @@ longer trusts it — see `tmux-persistence.md`.)
 | `claude-pr` | — (run `claude-pr`) | push the worktree branch and open a PR (`gh`) |
 | `claude-sync` | — | pull `test/` branch commits back into the working branch |
 | `claude-gc` | — | prune old `pane-map` files, trim `ready.log` |
-| `claude-dashboard` | — | gather git/worktree context, pipe to `claude -p` for a summary |
-| `claude-dash` | — | full-screen TUI over sessions (Python via `uv`), with resume |
 
 **Runtime state (NOT committed — regenerated at use):**
 `~/.claude/pane-map/`, `~/.claude/ready.log`, `~/.claude/history.jsonl`,

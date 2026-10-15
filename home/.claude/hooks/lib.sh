@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 # ~/.claude/hooks/lib.sh — shared helpers for on-stop / on-notification / on-session-start.
+# WSL: these are GitHub Copilot CLI hooks (registered in ~/.copilot/settings.json
+# by install.sh). Paths stay under ~/.claude/ for parity with the macOS repo.
 # Never called directly.
+
+# Background one-shots (claude-commit / claude-pr run `copilot -p` with
+# CW_HEADLESS=1) shouldn't notify or tick a window. Copilot passes its env to hooks.
+[[ -n "${CW_HEADLESS:-}" ]] && exit 0
 
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
 
@@ -10,7 +16,7 @@ ERROR_LOG="$HOME/.claude/hooks/error.log"
 DEBUG_LOG="$HOME/.claude/hooks/debug.jsonl"
 
 HOOK_START_S=${SECONDS}
-HOOK_AGENT="claude"
+HOOK_AGENT="copilot"
 HOOK_WATCHDOG_PID=""
 
 log_error() {
@@ -37,8 +43,8 @@ log_debug() {
     >> "$DEBUG_LOG" 2>/dev/null || true
 }
 
-# Hard-cap the hook so Claude/Grok never sit on "Running stop hook" for minutes.
-# Grok's default Stop timeout is 600s; this watchdog is the inner fuse.
+# Hard-cap the hook so the agent never sits on a running hook for minutes.
+# settings timeoutSec is the outer fuse; this watchdog is the inner one.
 install_watchdog() {
   local sec="${1:-5}"
   (
@@ -85,7 +91,8 @@ run_limited() {
   ' "$sec" "$@"
 }
 
-# Read hook stdin JSON. Accepts Claude snake_case and Grok camelCase.
+# Read hook stdin JSON. Copilot sends camelCase (sessionId, transcriptPath,
+# stopReason; agentStop has no event name), snake_case kept as a fallback.
 # Sets: HOOK_RAW, HOOK_SESSION_ID, HOOK_TRANSCRIPT_PATH, HOOK_CWD, HOOK_EVENT,
 #       HOOK_MESSAGE, HOOK_REASON, HOOK_TITLE, HOOK_AGENT
 parse_stdin() {
@@ -97,7 +104,7 @@ parse_stdin() {
     cwd: (.cwd // ""),
     event: (.hook_event_name // .hookEventName // ""),
     message: (.message // ""),
-    reason: (.reason // ""),
+    reason: (.stopReason // .reason // .source // ""),
     last_assistant: (.lastAssistantMessage // .last_assistant_message // "")
   }' 2>/dev/null) || parsed=""
 
@@ -117,10 +124,6 @@ parse_stdin() {
   # newline into a space, so an empty title became " " and skipped extract_title.
   HOOK_TITLE=$(printf '%s' "$parsed" | jq -r '.last_assistant | gsub("\\s+"; " ") | ltrimstr(" ") | .[:80]')
 
-  if [[ -n "${GROK_SESSION_ID:-}" || -n "${GROK_HOOK_EVENT:-}" ]]; then
-    HOOK_AGENT="grok"
-  fi
-
   if [[ -z "${HOOK_SESSION_ID:-}" ]]; then
     log_error "parse_stdin: missing session_id"
     log_debug parse_fail "missing session_id"
@@ -128,30 +131,37 @@ parse_stdin() {
   fi
 }
 
-# Prefer the payload title; otherwise scan only the tail of the transcript.
+# Copilot's transcript: ~/.copilot/session-state/<sid>/events.jsonl, one event
+# per line; user prompts are {"type":"user.message","timestamp":…,"data":{"content":…}}.
+copilot_transcript() {
+  if [[ -n "${HOOK_TRANSCRIPT_PATH:-}" && -f "$HOOK_TRANSCRIPT_PATH" ]]; then
+    printf '%s' "$HOOK_TRANSCRIPT_PATH"
+  else
+    printf '%s' "$HOME/.copilot/session-state/${HOOK_SESSION_ID}/events.jsonl"
+  fi
+}
+
+# Last user.message in the transcript tail (only the tail — these files grow
+# large and a full scan can outlive the watchdog). Prints compact JSON or nothing.
+last_user_message() {
+  local jsonl="$1"
+  [[ -f "$jsonl" ]] || return 0
+  tail -c 131072 "$jsonl" 2>/dev/null \
+    | tail -n +2 \
+    | jq -c 'select(.type == "user.message") | {ts: (.timestamp // ""), text: (.data.content // "")}' 2>/dev/null \
+    | tail -1
+}
+
+# Prefer the payload title; otherwise the last prompt from the transcript.
 extract_title() {
   local jsonl="$1"
   if [[ -n "${HOOK_TITLE:-}" && "$HOOK_TITLE" != "null" ]]; then
     return 0
   fi
   HOOK_TITLE="(untitled)"
-  [[ -f "$jsonl" ]] || return 0
-
   local result
-  result=$(tail -c 131072 "$jsonl" 2>/dev/null \
-    | tail -n +2 \
-    | jq -r '
-        select((.role // .message.role // .type) == "user") |
-        (.message.content // .content) |
-        if type == "string" then .
-        elif type == "array" then map(.text // "") | join("")
-        else empty end |
-        select(length > 0 and length <= 500) |
-        select(test("^\\s*<") | not) |
-        gsub("\n"; " ") |
-        .[:80]
-      ' 2>/dev/null | tail -1) || true
-
+  result=$(last_user_message "$jsonl" \
+    | jq -r '.text | gsub("\\s+"; " ") | ltrimstr(" ") | select(length > 0) | .[:80]' 2>/dev/null) || true
   [[ -n "$result" ]] && HOOK_TITLE="$result"
 }
 

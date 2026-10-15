@@ -1,4 +1,9 @@
-# tmux Persistence Across Reboots (with Claude / Copilot session resume)
+# tmux Persistence Across Reboots (with Copilot session resume)
+
+> **WSL repo:** Copilot is the only agent, so `ai-persist-save.sh` only detects
+> copilot panes (via `inuse.<pid>.lock`, falling back to the `copilot:<id>` pane
+> title `cw` sets) and restore only types `copilot --resume=<id>`. The claude
+> parts below describe the macOS repo.
 
 Restore your whole tmux workspace after a reboot — sessions, windows, pane
 layouts, and every worktree working directory — **and** re-attach each `claude`
@@ -99,8 +104,6 @@ apart; a specific `--resume <id>` can).
 | **lazygit** | relaunched at the right cwd (stateless — perfect) |
 | **claude** | shell restored at the worktree → `claude --resume <id>` typed in |
 | **copilot** | shell restored at the worktree → `copilot --resume=<id>` typed in |
-| **grok** | shell restored at the worktree → `grok --resume <id>` typed in (id from an open `~/.grok/sessions/…/updates.jsonl`) |
-| **codex** | shell restored at the worktree → `codex resume <id>` typed in (id from the `cw`-set pane title `codex:<id>`) |
 | **dev servers** (`node`, etc.) | restored as a shell at the right cwd; not auto-run (they died with the machine — relaunch them yourself) |
 
 Guards in the restore script: it only types into a **fresh shell** pane (never

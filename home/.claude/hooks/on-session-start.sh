@@ -10,5 +10,5 @@ source "$SCRIPT_DIR/lib.sh" 2>/dev/null || exit 0
 install_watchdog 3
 log_debug start "on-session-start"
 parse_stdin || true
-log_debug session_start "source=${HOOK_REASON:-startup} grok_event=${GROK_HOOK_EVENT:-}"
+log_debug session_start "source=${HOOK_REASON:-startup}"
 exit 0

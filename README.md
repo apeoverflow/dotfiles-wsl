@@ -2,7 +2,7 @@
 
 WSL2 (Ubuntu/Debian) port of my macOS terminal setup
 ([`dotfiles-mac`](https://github.com/apeoverflow/dotfiles-mac)) — zsh +
-powerlevel10k + tmux + the agent orchestration (Claude / Copilot / Codex / Grok / Pi) + reboot
+powerlevel10k + tmux + the agent orchestration (**GitHub Copilot CLI only** on WSL) + reboot
 persistence. Same structure and symlink workflow; the platform-specific bits are
 adapted for Linux/WSL.
 
@@ -23,10 +23,9 @@ chsh -s $(which zsh)   # then restart WSL:  wsl --shutdown  (from Windows)
 ./doctor.sh       # verify everything is present
 ```
 
-AI CLIs (install separately): **Claude Code** (official installer →
-`~/.local/bin/claude`), **Copilot** / **Codex** (`npm i -g @github/copilot
-@openai/codex`, needs Node), and optionally **Grok** / **Pi** via their own
-installers. `cw` picks them with `-cp` / `-co` / `-gr` / `-pi`.
+Agent: **GitHub Copilot CLI** only — `npm i -g @github/copilot && copilot login`
+(needs Node; `setup.sh` installs it). `install.sh` registers the hooks in
+`~/.copilot/settings.json`, so if Copilot wasn't installed yet, just re-run it.
 Neovim config is its own repo: `git clone https://github.com/apeoverflow/KW-IDE.git ~/.config/nvim`.
 
 ---
@@ -61,12 +60,16 @@ cd ~/dotfiles-wsl && git add -A && git commit -m "…" && git push
 | `stat` mtime | `stat -f %m` | `stat -c %Y` first, BSD fallback |
 | `lsof` (ai-persist) | `/usr/sbin/lsof` | `lsof` on `$PATH` |
 | JAVA_HOME | `/usr/libexec/java_home` | JDK path if present, else unset |
-| removed | iTerm2 integration, MATLAB, `/opt/homebrew`, gcloud-in-Downloads, fvm, Dart pub-cache, Unity CLI, `settings.json` `autoMode` (project-specific) | — |
+| agent | Claude Code (default) + Copilot / Codex / Grok / Pi | **Copilot only** — `cw` always launches `copilot` |
+| hook registration | `~/.claude/settings.json` (symlinked) | merged into `~/.copilot/settings.json` by `install.sh` (`agentStop` / `notification` / `sessionStart`) |
+| models (`cw`) | `claude-opus-4.6` / `claude-sonnet-4.6` via copilot | `claude-opus-5.5` / `claude-sonnet-5.5` (the 4.6 ids aren't offered any more) |
+| removed | iTerm2 integration, MATLAB, `/opt/homebrew`, gcloud-in-Downloads, fvm, Dart pub-cache, Unity CLI, `~/.claude/settings.json`, `claude-dash`, `claude-dashboard` | — |
 
-The **portable core is unchanged**: `cw`, all `claude-*` scripts, the pane-map,
-the Stop/Notification/SessionStart hooks (with their watchdog + `debug.jsonl`
-log; `~/.claude/hooks/diagnose.sh` dumps it), tmux keybindings, and the
-resurrect + ai-persist reboot layer. Package management is `apt` + a couple of release binaries (see
+The **portable core is unchanged**: `cw`, the `claude-*` scripts (names and
+`~/.claude/` paths kept for parity with the Mac repo, even though they drive
+Copilot here), the pane-map, the stop/notification/session-start hooks (with
+their watchdog + `debug.jsonl` log; `~/.claude/hooks/diagnose.sh` dumps it),
+tmux keybindings, and the resurrect + ai-persist reboot layer. Package management is `apt` + a couple of release binaries (see
 `setup.sh`).
 
 **Optional `Brewfile`** — a reduced version of the macOS Brewfile for use with
