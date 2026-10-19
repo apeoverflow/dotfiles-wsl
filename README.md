@@ -7,6 +7,7 @@ persistence. Same structure and symlink workflow; the platform-specific bits are
 adapted for Linux/WSL.
 
 - 📘 [`docs/dev-environment-setup.md`](docs/dev-environment-setup.md) — full component walkthrough (macOS-oriented; concepts identical)
+- 🐧 [`docs/wsl-setup.md`](docs/wsl-setup.md) — copy-and-paste setup instructions for WSL
 - 🔁 [`docs/tmux-persistence.md`](docs/tmux-persistence.md) — reboot/session-resume layer
 
 ---
